@@ -27,7 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "tool",
         nargs='?',  # Make tool optional
-        choices=["freesurfer", "fmriprep", "qsiprep"],
+        choices=["freesurfer", "fmriprep", "qsiprep", "qsirecon", "meld_graph"],
         help="Neuroimaging tool to use (optional if using config file)"
     )
 
@@ -134,6 +134,24 @@ def parse_args() -> argparse.Namespace:
         "--anat-only",
         action="store_true",
         help="Process only anatomical data (QSIPrep only)"
+    )
+
+    # QSIRecon specific arguments
+    parser.add_argument(
+        "--qsiprep-version",
+        help="QSIPrep version to use as input for QSIRecon (default: uses DEFAULT_QSIPREP_VERSION)"
+    )
+
+    parser.add_argument(
+        "--recon-spec",
+        default="mrtrix_multishell_msmt_ACT-hsvs",
+        help="Reconstruction spec for QSIRecon (default: mrtrix_multishell_msmt_ACT-hsvs)"
+    )
+
+    # MELD Graph specific arguments
+    parser.add_argument(
+        "--fs-version",
+        help="FreeSurfer version to use for MELD Graph input (default: uses DEFAULT_FS_VERSION)"
     )
 
     parser.add_argument(

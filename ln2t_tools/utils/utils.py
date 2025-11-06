@@ -231,6 +231,10 @@ def ensure_image_exists(
         tool_owner = "nipreps"
     elif tool == "qsiprep":
         tool_owner = "pennlinc"
+    elif tool == "qsirecon":
+        tool_owner = "pennlinc"
+    elif tool == "meld_graph":
+        tool_owner = "meldproject"
     else:
         raise ValueError(f"Unsupported tool: {tool}")
     image_path = apptainer_dir / f"{tool_owner}.{tool}.{version}.sif"
@@ -440,6 +444,46 @@ def build_apptainer_cmd(tool: str, **options) -> str:
             f"--skip-bids-validation "
             f"{options.get('dwi_only', '')} "
             f"{options.get('anat_only', '')}"
+        )
+    elif tool == "qsirecon":
+        # QSIRecon for DWI reconstruction - requires QSIPrep preprocessed data
+        qsiprep_dir = options.get('qsiprep_dir', '')
+        if not qsiprep_dir:
+            raise ValueError("qsiprep_dir is required for QSIRecon")
+        
+        return (
+            f"apptainer run "
+            f"-B {options['fs_license']}:/opt/freesurfer/license.txt "
+            f"-B {qsiprep_dir}:/data:ro "
+            f"-B {options['derivatives']}:/out "
+            f"{options['apptainer_img']} "
+            f"/data /out participant "
+            f"--participant-label {options['participant_label']} "
+            f"--recon-spec {options.get('recon_spec', 'mrtrix_multishell_msmt_ACT-hsvs')} "
+            f"--nprocs {options.get('nprocs', 8)} "
+            f"--omp-nthreads {options.get('omp_nthreads', 8)} "
+            f"--fs-license-file /opt/freesurfer/license.txt "
+            f"--skip-bids-validation "
+            f"{options.get('additional_options', '')}"
+        )
+    elif tool == "meld_graph":
+        # MELD Graph for lesion detection - requires FreeSurfer derivatives
+        fs_subjects_dir = options.get('fs_subjects_dir', '')
+        fs_bind_option = (
+            f"-B {fs_subjects_dir}:/freesurfer:ro" 
+            if fs_subjects_dir else ""
+        )
+        
+        return (
+            f"apptainer run "
+            f"-B {options['rawdata']}:/data:ro "
+            f"-B {options['derivatives']}:/output "
+            f"{fs_bind_option} "
+            f"{options['apptainer_img']} "
+            f"--subject_id {options['participant_label']} "
+            f"--subjects_dir /freesurfer "
+            f"--output_dir /output "
+            f"{options.get('additional_options', '')}"
         )
     
     else:

@@ -5,7 +5,7 @@ _ln2t_tools_completion() {
     _init_completion || return
 
     # List of tools
-    local tools="freesurfer fmriprep qsiprep"
+    local tools="freesurfer fmriprep qsiprep qsirecon meld_graph"
     
     # Function to get dataset name from command line
     _get_dataset_name() {
@@ -43,7 +43,7 @@ _ln2t_tools_completion() {
     if _completing_participants; then
         local dataset=$(_get_dataset_name)
         if [ -n "$dataset" ]; then
-            local subjects=$(find ~/rawdata/"$dataset"-rawdata -maxdepth 1 -name "sub-*" -type d -printf "%f\n" 2>/dev/null | sed 's/^sub-//')
+            local subjects=$(find -L ~/rawdata/"$dataset"-rawdata -maxdepth 1 -name "sub-*" -type d -printf "%f\n" 2>/dev/null | sed 's/^sub-//')
             COMPREPLY=( $(compgen -W "${subjects}" -- "$cur") )
             return 0
         fi
@@ -51,13 +51,13 @@ _ln2t_tools_completion() {
 
     # Handle options
     case $prev in
-        freesurfer|fmriprep|qsiprep)
+        freesurfer|fmriprep|qsiprep|qsirecon|meld_graph)
             COMPREPLY=( $(compgen -W "--dataset" -- "$cur") )
             return 0
             ;;
         --dataset)
             # Get available datasets from rawdata directory
-            local datasets=$(find ~/rawdata -maxdepth 1 -name "*-rawdata" -type d -printf "%f\n" | sed 's/-rawdata$//')
+            local datasets=$(find -L ~/rawdata -maxdepth 1 -name "*-rawdata" -type d -printf "%f\n" | sed 's/-rawdata$//')
             COMPREPLY=( $(compgen -W "${datasets}" -- "$cur") )
             return 0
             ;;
@@ -66,7 +66,7 @@ _ln2t_tools_completion() {
             local dataset=$(_get_dataset_name)
             if [ -n "$dataset" ]; then
                 # Get available subjects from the specific dataset directory
-                local subjects=$(find ~/rawdata/"$dataset"-rawdata -maxdepth 1 -name "sub-*" -type d -printf "%f\n" 2>/dev/null | sed 's/^sub-//')
+                local subjects=$(find -L ~/rawdata/"$dataset"-rawdata -maxdepth 1 -name "sub-*" -type d -printf "%f\n" 2>/dev/null | sed 's/^sub-//')
                 COMPREPLY=( $(compgen -W "${subjects}" -- "$cur") )
                 return 0
             fi
@@ -83,6 +83,16 @@ _ln2t_tools_completion() {
             # Add QSIPrep specific options
             if [[ ${words[1]} == "qsiprep" ]]; then
                 opts+=" --output-resolution --denoise-method --dwi-only --anat-only --nprocs --omp-nthreads"
+            fi
+            
+            # Add QSIRecon specific options
+            if [[ ${words[1]} == "qsirecon" ]]; then
+                opts+=" --qsiprep-version --recon-spec --nprocs --omp-nthreads"
+            fi
+            
+            # Add MELD Graph specific options
+            if [[ ${words[1]} == "meld_graph" ]]; then
+                opts+=" --fs-version"
             fi
             
             COMPREPLY=( $(compgen -W "${opts}" -- "$cur") )

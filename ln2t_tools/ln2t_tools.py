@@ -24,7 +24,9 @@ from ln2t_tools.utils.defaults import (
     DEFAULT_DERIVATIVES,
     DEFAULT_FS_VERSION,
     DEFAULT_FMRIPREP_VERSION,
-    DEFAULT_QSIPREP_VERSION
+    DEFAULT_QSIPREP_VERSION,
+    DEFAULT_QSIRECON_VERSION,
+    DEFAULT_MELDGRAPH_VERSION
 )
 
 # Setup logging
@@ -183,7 +185,11 @@ def setup_directories(args) -> tuple[Path, Path, Path]:
 
     dataset_derivatives = Path(DEFAULT_DERIVATIVES) / f"{args.dataset}-derivatives"
     version = (DEFAULT_FS_VERSION if args.tool == 'freesurfer' 
-              else DEFAULT_FMRIPREP_VERSION)
+              else DEFAULT_FMRIPREP_VERSION if args.tool == 'fmriprep'
+              else DEFAULT_QSIPREP_VERSION if args.tool == 'qsiprep'
+              else DEFAULT_QSIRECON_VERSION if args.tool == 'qsirecon'
+              else DEFAULT_MELDGRAPH_VERSION if args.tool == 'meld_graph'
+              else None)
     output_dir = dataset_derivatives / (args.output_label or 
                                       f"{args.tool}_{args.version or version}")
     
@@ -367,14 +373,16 @@ def process_fmriprep_subject(
         fs_output_dir = None
 
     # Build and launch fMRIPrep command
+    output_dir = dataset_derivatives / (args.output_label or f"fmriprep_{args.version or DEFAULT_FMRIPREP_VERSION}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
     apptainer_cmd = build_apptainer_cmd(
         tool="fmriprep",
         fs_license=args.fs_license,
         rawdata=str(dataset_rawdata),
-        derivatives=str(dataset_derivatives),
+        derivatives=str(output_dir),
         participant_label=participant_label,
         apptainer_img=apptainer_img,
-        output_label=args.output_label or f"fmriprep_{args.version or DEFAULT_FMRIPREP_VERSION}",
         fs_no_reconall=fs_no_reconall,
         output_spaces=getattr(args, 'output_spaces', "MNI152NLin2009cAsym:res-2"),
         nprocs=getattr(args, 'nprocs', 8),
@@ -447,20 +455,155 @@ def process_qsiprep_subject(
         return
 
     # Build and launch QSIPrep command
+    output_dir = dataset_derivatives / (args.output_label or f"qsiprep_{args.version or DEFAULT_QSIPREP_VERSION}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
     apptainer_cmd = build_apptainer_cmd(
         tool="qsiprep",
         fs_license=args.fs_license,
         rawdata=str(dataset_rawdata),
-        derivatives=str(dataset_derivatives),
+        derivatives=str(output_dir),
         participant_label=participant_label,
         apptainer_img=apptainer_img,
-        output_label=args.output_label or f"qsiprep_{args.version or DEFAULT_QSIPREP_VERSION}",
         output_resolution=getattr(args, 'output_resolution'),
         denoise_method=getattr(args, 'denoise_method', 'dwidenoise'),
         dwi_only="--dwi-only" if getattr(args, 'dwi_only', False) else "",
         anat_only="--anat-only" if getattr(args, 'anat_only', False) else "",
         nprocs=getattr(args, 'nprocs', 8),
         omp_nthreads=getattr(args, 'omp_nthreads', 8)
+    )
+    launch_apptainer(apptainer_cmd=apptainer_cmd)
+
+def process_qsirecon_subject(
+    layout: BIDSLayout,
+    participant_label: str,
+    args,
+    dataset_rawdata: Path,
+    dataset_derivatives: Path,
+    apptainer_img: str
+) -> None:
+    """Process a single subject with QSIRecon for DWI reconstruction.
+    
+    Args:
+        layout: BIDSLayout object for BIDS dataset
+        participant_label: Subject ID without 'sub-' prefix
+        args: Parsed command line arguments
+        dataset_rawdata: Path to BIDS rawdata directory
+        dataset_derivatives: Path to derivatives directory
+        apptainer_img: Path to Apptainer image
+    """
+    # QSIRecon requires QSIPrep preprocessed data
+    # Check for QSIPrep derivatives
+    qsiprep_version = getattr(args, 'qsiprep_version', DEFAULT_QSIPREP_VERSION)
+    qsiprep_dir = dataset_derivatives / f"qsiprep_{qsiprep_version}"
+    
+    if not qsiprep_dir.exists():
+        logger.error(
+            f"QSIPrep output not found at: {qsiprep_dir}\n"
+            f"QSIRecon requires QSIPrep preprocessed data as input.\n"
+            f"Please run QSIPrep first, or specify the correct QSIPrep version with --qsiprep-version.\n"
+            f"Expected QSIPrep output directory: {qsiprep_dir}"
+        )
+        return
+    
+    # Check if participant exists in QSIPrep output
+    participant_qsiprep_dir = qsiprep_dir / f"sub-{participant_label}"
+    if not participant_qsiprep_dir.exists():
+        logger.error(
+            f"Participant {participant_label} not found in QSIPrep output at: {qsiprep_dir}\n"
+            f"Please run QSIPrep for this participant first."
+        )
+        return
+
+    # Build output directory path
+    output_subdir = build_bids_subdir(participant_label)
+    output_participant_dir = dataset_derivatives / (
+        args.output_label or 
+        f"qsirecon_{args.version or DEFAULT_QSIRECON_VERSION}"
+    ) / output_subdir
+
+    if output_participant_dir.exists():
+        logger.info(f"Output exists, skipping: {output_participant_dir}")
+        return
+
+    logger.info(f"Using QSIPrep data from: {qsiprep_dir}")
+
+    # Build and launch QSIRecon command
+    output_dir = dataset_derivatives / (args.output_label or f"qsirecon_{args.version or DEFAULT_QSIRECON_VERSION}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    apptainer_cmd = build_apptainer_cmd(
+        tool="qsirecon",
+        fs_license=args.fs_license,
+        qsiprep_dir=str(qsiprep_dir),
+        derivatives=str(output_dir),
+        participant_label=participant_label,
+        apptainer_img=apptainer_img,
+        recon_spec=getattr(args, 'recon_spec', 'mrtrix_multishell_msmt_ACT-hsvs'),
+        nprocs=getattr(args, 'nprocs', 8),
+        omp_nthreads=getattr(args, 'omp_nthreads', 8),
+        additional_options=getattr(args, 'additional_options', '')
+    )
+    launch_apptainer(apptainer_cmd=apptainer_cmd)
+
+def process_meldgraph_subject(
+    layout: BIDSLayout,
+    participant_label: str,
+    args,
+    dataset_rawdata: Path,
+    dataset_derivatives: Path,
+    apptainer_img: str
+) -> None:
+    """Process a single subject with MELD Graph for lesion detection.
+    
+    Args:
+        layout: BIDSLayout object for BIDS dataset
+        participant_label: Subject ID without 'sub-' prefix
+        args: Parsed command line arguments
+        dataset_rawdata: Path to BIDS rawdata directory
+        dataset_derivatives: Path to derivatives directory
+        apptainer_img: Path to Apptainer image
+    """
+    # MELD Graph requires FreeSurfer output
+    # Check for FreeSurfer derivatives
+    fs_version = getattr(args, 'fs_version', DEFAULT_FS_VERSION)
+    fs_subjects_dir = get_freesurfer_output(
+        dataset_derivatives,
+        participant_label,
+        fs_version
+    )
+    
+    if not fs_subjects_dir:
+        logger.warning(
+            f"No FreeSurfer output found for participant {participant_label}. "
+            f"MELD Graph requires FreeSurfer recon-all to be completed first."
+        )
+        return
+
+    # Build output directory path
+    output_subdir = build_bids_subdir(participant_label)
+    meld_version = args.version or DEFAULT_MELDGRAPH_VERSION
+    output_participant_dir = dataset_derivatives / (
+        args.output_label or 
+        f"meld_graph_{meld_version}"
+    ) / output_subdir
+
+    if output_participant_dir.exists():
+        logger.info(f"Output exists, skipping: {output_participant_dir}")
+        return
+
+    # Build and launch MELD Graph command
+    output_dir = dataset_derivatives / (args.output_label or f"meld_graph_{meld_version}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    apptainer_cmd = build_apptainer_cmd(
+        tool="meld_graph",
+        rawdata=str(dataset_rawdata),
+        derivatives=str(output_dir),
+        participant_label=participant_label,
+        apptainer_img=apptainer_img,
+        fs_subjects_dir=fs_subjects_dir.parent,  # FreeSurfer subjects directory
+        additional_options=getattr(args, 'additional_options', '')
     )
     launch_apptainer(apptainer_cmd=apptainer_cmd)
 
@@ -556,7 +699,9 @@ def main(args=None) -> None:
                 if hasattr(args, 'tool') and args.tool:
                     default_version = DEFAULT_FS_VERSION if args.tool == 'freesurfer' else \
                                     DEFAULT_FMRIPREP_VERSION if args.tool == 'fmriprep' else \
-                                    DEFAULT_QSIPREP_VERSION
+                                    DEFAULT_QSIPREP_VERSION if args.tool == 'qsiprep' else \
+                                    DEFAULT_QSIRECON_VERSION if args.tool == 'qsirecon' else \
+                                    DEFAULT_MELDGRAPH_VERSION if args.tool == 'meld_graph' else None
                     tools_to_run = {args.tool: getattr(args, 'version', None) or default_version}
                 else:
                     logger.warning(f"No tools specified for dataset {dataset}, skipping")
@@ -591,7 +736,7 @@ def main(args=None) -> None:
 
                 # Process each tool for this dataset
                 for tool, version in tools_to_run.items():
-                    if tool not in ["freesurfer", "fmriprep", "qsiprep"]:
+                    if tool not in ["freesurfer", "fmriprep", "qsiprep", "qsirecon", "meld_graph"]:
                         logger.warning(f"Unsupported tool {tool} for dataset {dataset}, skipping")
                         continue
                     
@@ -632,6 +777,24 @@ def main(args=None) -> None:
                                     )
                                 elif tool == "qsiprep":
                                     process_qsiprep_subject(
+                                        layout=layout,
+                                        participant_label=participant_label,
+                                        args=args,
+                                        dataset_rawdata=dataset_rawdata,
+                                        dataset_derivatives=dataset_derivatives,
+                                        apptainer_img=apptainer_img
+                                    )
+                                elif tool == "qsirecon":
+                                    process_qsirecon_subject(
+                                        layout=layout,
+                                        participant_label=participant_label,
+                                        args=args,
+                                        dataset_rawdata=dataset_rawdata,
+                                        dataset_derivatives=dataset_derivatives,
+                                        apptainer_img=apptainer_img
+                                    )
+                                elif tool == "meld_graph":
+                                    process_meldgraph_subject(
                                         layout=layout,
                                         participant_label=participant_label,
                                         args=args,
