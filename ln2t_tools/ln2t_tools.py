@@ -670,20 +670,27 @@ def process_meldgraph_subject(
     create_meld_config_json(meld_config_dir, use_bids=True)
     create_meld_dataset_description(meld_config_dir, args.dataset)
     
-    # Create input symlinks for participant
-    if not prepare_meld_input_symlinks(
-        meld_data_dir / "input",
-        layout,
-        participant_label
-    ):
-        logger.error(f"Failed to prepare input data for {participant_label}")
-        return
-    
     # Check for FreeSurfer outputs if needed
     fs_derivatives_dir = None
     use_skip_segmentation = getattr(args, 'skip_segmentation', False)
+    use_precomputed = getattr(args, 'use_precomputed_fs', False)
     
-    if getattr(args, 'use_precomputed_fs', False):
+    # IMPORTANT: Only create input symlinks if NOT using precomputed FreeSurfer
+    # When MELD finds input files, it tries to run FreeSurfer
+    # When using precomputed FS, we only want MELD to see the FreeSurfer outputs
+    if not use_precomputed:
+        if not prepare_meld_input_symlinks(
+            meld_data_dir / "input",
+            layout,
+            participant_label
+        ):
+            logger.error(f"Failed to prepare input data for {participant_label}")
+            return
+    else:
+        logger.info("Skipping input symlink creation (using precomputed FreeSurfer)")
+        logger.info("MELD will use existing FreeSurfer outputs for feature extraction")
+    
+    if use_precomputed:
         fs_version = getattr(args, 'fs_version', None) or DEFAULT_MELD_FS_VERSION
         fs_subject_dir = get_freesurfer_output(
             dataset_derivatives,
@@ -701,27 +708,16 @@ def process_meldgraph_subject(
             # Get the FreeSurfer derivatives directory (freesurfer_7.2.0/)
             fs_derivatives_dir = dataset_derivatives / f"freesurfer_{fs_version}"
             logger.info(f"Using precomputed FreeSurfer outputs from: {fs_derivatives_dir}")
+            logger.info(f"FreeSurfer directory will be bound to /data/output/fs_outputs in container")
             
-            # Create symlink to FreeSurfer output in MELD structure
-            meld_fs_outputs_dir = meld_output_dir / "fs_outputs"
-            fs_subject_src = fs_derivatives_dir / f"sub-{participant_label}"
-            fs_subject_dest = meld_fs_outputs_dir / f"sub-{participant_label}"
-            
-            # Remove existing symlink/directory if it exists
-            if fs_subject_dest.exists() or fs_subject_dest.is_symlink():
-                if fs_subject_dest.is_symlink():
-                    fs_subject_dest.unlink()
-                else:
-                    logger.warning(f"Removing existing directory: {fs_subject_dest}")
-                    shutil.rmtree(fs_subject_dest)
-            
-            # Create symlink
-            fs_subject_dest.symlink_to(fs_subject_src)
-            logger.info(f"Linked FreeSurfer output: {fs_subject_src} -> {fs_subject_dest}")
-            logger.info("MELD will detect existing FreeSurfer output and skip recon-all")
+            # Verify the subject exists in FreeSurfer outputs
+            fs_subject_dir = fs_derivatives_dir / f"sub-{participant_label}"
+            if not fs_subject_dir.exists():
+                logger.error(f"FreeSurfer output not found: {fs_subject_dir}")
+                return
             
             # Check for and create completion marker if missing
-            scripts_dir = fs_subject_dest / "scripts"
+            scripts_dir = fs_subject_dir / "scripts"
             if scripts_dir.exists():
                 done_file = scripts_dir / "recon-all.done"
                 if not done_file.exists():
@@ -737,8 +733,8 @@ def process_meldgraph_subject(
             if not use_skip_segmentation:
                 logger.info("MELD will run feature extraction to create .sm3.mgh files")
             
-            # Don't pass fs_derivatives_dir to apptainer since we've symlinked into meld_data_dir
-            fs_derivatives_dir = None
+            # Keep fs_derivatives_dir to bind into container
+            logger.info(f"Will bind FreeSurfer directory into container: {fs_derivatives_dir}")
     
     # Build and launch MELD Graph command
     apptainer_cmd = build_apptainer_cmd(
@@ -747,7 +743,7 @@ def process_meldgraph_subject(
         participant_label=participant_label,
         apptainer_img=apptainer_img,
         fs_license=str(args.fs_license),
-        fs_subjects_dir=None,  # Not needed - using symlinks in meld_data_dir
+        fs_subjects_dir=str(fs_derivatives_dir) if fs_derivatives_dir else None,
         harmo_code=getattr(args, 'harmo_code', None),
         demographics=getattr(args, 'demographics', None),
         skip_segmentation=use_skip_segmentation,
@@ -951,63 +947,26 @@ def process_meld_harmonization(
         
         fs_subjects_dir = str(freesurfer_output_dir)
         logger.info(f"Using precomputed FreeSurfer outputs from: {fs_subjects_dir}")
+        logger.info(f"FreeSurfer directory will be bound to /data/output/fs_outputs in container")
         logger.info("MELD will detect existing FreeSurfer outputs and skip recon-all")
         logger.info("MELD will still run feature extraction to create .sm3.mgh files")
         
-        # Create symlinks to FreeSurfer outputs in MELD structure
-        meld_fs_outputs_dir = meld_output_dir / "fs_outputs"
-        logger.info(f"Creating symlinks to FreeSurfer outputs in: {meld_fs_outputs_dir}")
-        
+        # Check for and create completion markers for all participants
         for participant_label in participant_labels:
-            fs_subject_src = freesurfer_output_dir / f"sub-{participant_label}"
-            fs_subject_dest = meld_fs_outputs_dir / f"sub-{participant_label}"
+            fs_subject_dir = freesurfer_output_dir / f"sub-{participant_label}"
+            scripts_dir = fs_subject_dir / "scripts"
             
-            # Remove existing symlink/directory if it exists
-            if fs_subject_dest.exists() or fs_subject_dest.is_symlink():
-                if fs_subject_dest.is_symlink():
-                    fs_subject_dest.unlink()
-                else:
-                    logger.warning(f"Removing existing directory: {fs_subject_dest}")
-                    shutil.rmtree(fs_subject_dest)
-            
-            # Create symlink
-            fs_subject_dest.symlink_to(fs_subject_src)
-            logger.info(f"  - Linked sub-{participant_label}: {fs_subject_src} -> {fs_subject_dest}")
-            
-            # Verify symlink and check for completion marker
-            if fs_subject_dest.is_symlink():
-                logger.info(f"    Symlink verified: {fs_subject_dest} -> {fs_subject_dest.resolve()}")
-                # Check if MELD completion markers exist
-                surf_dir = fs_subject_dest / "surf"
-                scripts_dir = fs_subject_dest / "scripts"
-                if surf_dir.exists():
-                    logger.info(f"    FreeSurfer surf/ directory found")
-                if scripts_dir.exists():
-                    logger.info(f"    FreeSurfer scripts/ directory found")
-                    # Check for recon-all completion markers
-                    done_file = scripts_dir / "recon-all.done"
-                    if done_file.exists():
-                        logger.info(f"    recon-all.done marker found")
-                    else:
-                        logger.warning(
-                            f"    recon-all.done marker NOT found - MELD may try to re-run FreeSurfer\n"
-                            f"    Creating completion marker to indicate FreeSurfer has finished"
-                        )
-                        # Create the marker file to tell MELD that FreeSurfer is complete
-                        # This is safe because we've verified the outputs are complete above
-                        try:
-                            done_file.touch()
-                            logger.info(f"    Created {done_file}")
-                        except Exception as e:
-                            logger.error(f"    Failed to create completion marker: {e}")
-                            logger.error(f"    MELD will likely try to re-run FreeSurfer")
-            else:
-                logger.error(f"    Failed to create symlink for sub-{participant_label}")
+            if scripts_dir.exists():
+                done_file = scripts_dir / "recon-all.done"
+                if not done_file.exists():
+                    logger.warning(f"recon-all.done marker not found for sub-{participant_label} - creating it")
+                    try:
+                        done_file.touch()
+                        logger.info(f"  Created {done_file}")
+                    except Exception as e:
+                        logger.error(f"  Failed to create completion marker: {e}")
         
-        # Don't pass fs_subjects_dir to apptainer since we've symlinked into meld_data_dir
-        fs_subjects_dir = None
-        # Don't set skip_segmentation=True for harmonization
-        # We want MELD to run feature extraction
+        # Keep fs_subjects_dir to bind into container (don't set to None!)
     
     # Build command with --harmo_only flag
     apptainer_cmd = build_apptainer_cmd(
@@ -1016,7 +975,7 @@ def process_meld_harmonization(
         participant_label=participant_labels,  # Pass list for subjects_list.txt
         apptainer_img=apptainer_img,
         fs_license=str(args.fs_license),
-        fs_subjects_dir=fs_subjects_dir,
+        fs_subjects_dir=fs_subjects_dir if 'fs_subjects_dir' in locals() else None,
         harmo_code=args.harmo_code,
         demographics=str(demographics_file.name),
         harmonize_only=True,

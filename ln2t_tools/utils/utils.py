@@ -503,9 +503,11 @@ def build_apptainer_cmd(tool: str, **options) -> str:
         ]
         
         # Add FreeSurfer outputs bind if using precomputed
+        # Note: Must be read-write because MELD needs to copy fsaverage_sym template
+        # and create intermediate files during feature extraction
         fs_subjects_dir = options.get('fs_subjects_dir', '')
         if fs_subjects_dir:
-            cmd_parts.append(f"-B {fs_subjects_dir}:/data/output/fs_outputs:ro")
+            cmd_parts.append(f"-B {fs_subjects_dir}:/data/output/fs_outputs")
         
         cmd_parts.append(f"{options['apptainer_img']}")
         cmd_parts.append("/bin/bash -c 'cd /app &&")
