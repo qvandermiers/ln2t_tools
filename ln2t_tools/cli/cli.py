@@ -208,15 +208,28 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--slurm-user",
+        type=str,
+        help="Username for HPC cluster (required if --slurm is used)"
+    )
+
+    parser.add_argument(
+        "--slurm-host",
+        type=str,
+        default="lyra.ulb.be",
+        help="HPC cluster hostname (default: lyra.ulb.be)"
+    )
+
+    parser.add_argument(
         "--slurm-rawdata",
         type=str,
-        help="Path to rawdata on HPC (required if --slurm is used)"
+        help="Path to rawdata on HPC (default: $GLOBALSCRATCH/rawdata on cluster)"
     )
 
     parser.add_argument(
         "--slurm-derivatives",
         type=str,
-        help="Path to derivatives on HPC (required if --slurm is used)"
+        help="Path to derivatives on HPC (default: $GLOBALSCRATCH/derivatives on cluster)"
     )
 
     parser.add_argument(
@@ -226,17 +239,30 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--slurm-fs-license",
+        type=str,
+        help="Path to FreeSurfer license on HPC (default: $HOME/licenses/license.txt on cluster)"
+    )
+
+    parser.add_argument(
+        "--slurm-fs-version",
+        type=str,
+        default="7.2.0",
+        help="FreeSurfer version to use on HPC (default: 7.2.0)"
+    )
+
+    parser.add_argument(
         "--slurm-partition",
         type=str,
-        default="gpu",
-        help="SLURM partition to use (default: gpu)"
+        default=None,
+        help="SLURM partition to use (default: None - let cluster decide)"
     )
 
     parser.add_argument(
         "--slurm-time",
         type=str,
-        default="24:00:00",
-        help="SLURM job time limit (default: 24:00:00)"
+        default="1:00:00",
+        help="SLURM job time limit (default: 1:00:00)"
     )
 
     parser.add_argument(

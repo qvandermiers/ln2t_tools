@@ -515,10 +515,8 @@ def build_apptainer_cmd(tool: str, **options) -> str:
         if use_gpu:
             # Help PyTorch manage GPU memory fragmentation and limit cache
             # max_split_size_mb: reduces fragmentation by splitting allocations
-            # garbage_collection_threshold: more aggressive memory cleanup (0.6 = 60% threshold)
-            # expandable_segments: allows PyTorch to release memory back to CUDA
             cmd_parts.extend([
-                f"--env PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:{gpu_memory_limit},garbage_collection_threshold:0.6,expandable_segments:True",
+                f"--env PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:{gpu_memory_limit}",
                 f"--env CUDA_LAUNCH_BLOCKING=1",  # Synchronous execution to catch errors early
             ])
         else:

@@ -676,15 +676,16 @@ def process_meldgraph_subject(
             # Ask user if they want to monitor the job
             logger.info("Job submitted successfully!")
             logger.info("To monitor the job, you can:")
-            logger.info(f"  1. Run: ssh arovai@lyra.ulb.be 'squeue -j {job_id}'")
-            logger.info(f"  2. View output: ssh arovai@lyra.ulb.be 'tail -f ~/ln2t_slurm_jobs/{args.dataset}/meld_graph-{args.dataset}-{participant_label}_{job_id}.out'")
+            logger.info(f"  1. Run: ssh -i ~/.ssh/id_rsa.ceci -J {args.slurm_user}@gwceci.ulb.ac.be {args.slurm_user}@{args.slurm_host} 'squeue -j {job_id}'")
+            logger.info(f"  2. View output: ssh -i ~/.ssh/id_rsa.ceci -J {args.slurm_user}@gwceci.ulb.ac.be {args.slurm_user}@{args.slurm_host} 'tail -f ~/ln2t_slurm_jobs/{args.dataset}/meld_graph-{args.dataset}-{participant_label}_{job_id}.out'")
             
             # Optional: monitor job interactively
             monitor = input("Monitor job progress now? [y/N]: ").lower().strip() == 'y'
             if monitor:
-                monitor_job(job_id)
+                monitor_job(job_id, args.slurm_user, args.slurm_host)
         else:
-            logger.error("Failed to submit SLURM job")
+            # SLURM submission failed - raise error to stop processing
+            raise RuntimeError(f"Failed to submit SLURM job for participant {participant_label}")
         
         return  # Exit early - job is submitted to HPC
     
