@@ -725,6 +725,123 @@ echo "source ~/.local/share/bash-completion/completions/ln2t_tools" >> ~/.bashrc
 source ~/.bashrc
 ```
 
+---
+
+## Data Import
+
+ln2t_tools includes import utilities to convert source data to BIDS format:
+
+- **DICOM**: Convert DICOM files to BIDS using dcm2bids with optional defacing
+- **MRS**: Convert MRS data to BIDS using spec2nii
+- **Physio**: Convert GE physiological monitoring data to BIDS using phys2bids
+
+### DICOM Import
+
+Convert DICOM files to BIDS-compliant NIfTI format with optional defacing:
+
+```bash
+# Basic DICOM import
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype dicom
+
+# Import with defacing (opt-in)
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype dicom --deface
+
+# Import multiple participants
+ln2t_tools import --dataset mydataset --participant-label 01 02 03 --datatype dicom
+
+# Compress source data after successful import
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype dicom --compress-source
+```
+
+**Notes**:
+- Defacing is **opt-in** via `--deface` flag (not applied by default)
+- Uses pydeface v2.0.6 via Singularity container
+- Adds metadata to JSON sidecars: `Defaced: true`, `DefacingMethod`, `DefacingTimestamp`
+- Auto-creates `dataset_description.json` if missing (required by pydeface)
+
+### MRS Import
+
+Convert Magnetic Resonance Spectroscopy data to BIDS format:
+
+```bash
+# Import MRS data
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype mrs
+
+# Import with session
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype mrs --session 01
+
+# Import and compress source
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype mrs --compress-source
+```
+
+### Physio Import
+
+Convert GE physiological monitoring data (respiratory, PPG) to BIDS format with automatic fMRI matching:
+
+```bash
+# Import physio data (automatically matches to fMRI runs)
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype physio
+
+# Import with session
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype physio --session 01
+
+# Import and compress source
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype physio --compress-source
+```
+
+**How It Works**:
+1. Parses GE physio filenames to extract signal type (RESP/PPG) and end-of-recording timestamp
+2. Reads fMRI JSON metadata (AcquisitionTime, TR) and NIfTI files (number of volumes)
+3. Computes fMRI end time = start time + (TR × volumes)
+4. Matches physio files to fMRI runs based on timestamp (5-second tolerance)
+5. Auto-generates phys2bids heuristic file
+6. Converts to BIDS format using phys2bids (via Apptainer container)
+
+**Filename Format**:
+- GE physio files: `{SIGNAL}{TYPE}_{SEQUENCE}_{DDMMYYYYHH_MM_SS_MS}`
+- Example: `RESPData_epiRTphysio_1124202515_54_58_279` (Nov 24, 2025, 15:54:58)
+- Data files are processed, Trig files are ignored
+
+**Requirements**:
+- fMRI data must already be in BIDS format in rawdata
+- Physio files in `~/sourcedata/{dataset}-sourcedata/physio/{ID}/`
+- phys2bids Apptainer container (auto-built from Docker Hub if missing)
+
+### Import All Datatypes
+
+```bash
+# Import all available datatypes for a participant
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype all
+
+# With multiple options
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype all --deface --compress-source
+```
+
+### Directory Naming Convention
+
+ln2t_tools uses strict folder matching for source data:
+
+- **Without sessions**: `{INITIALS}{ID}` (e.g., `FF042` for Fantastic_Fox participant 042)
+- **With sessions**: `{INITIALS}{ID}SES{session}` (e.g., `FF042SES1`)
+- **Initials**: Auto-extracted from dataset name (first letter of each word)
+  - "2024-Fantastic_Fox-123" → "FF"
+  - "Careful_Cod" → "CC"
+
+Example source structure:
+```
+~/sourcedata/mydataset-sourcedata/
+├── dicom/
+│   ├── FF001/
+│   ├── FF002/
+│   └── FF002SES2/
+├── mrs/
+│   └── FF001/
+└── physio/
+    └── FF001/
+```
+
+---
+
 ### Completion Features
 
 The completion script provides intelligent suggestions for:

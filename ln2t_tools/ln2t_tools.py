@@ -224,6 +224,9 @@ def handle_import(args):
     if getattr(args, 'session', None):
         logger.info(f"Session: {args.session}")
     
+    # Get apptainer directory
+    apptainer_dir = Path(getattr(args, 'apptainer_dir', '/opt/apptainer'))
+    
     # Get virtual environment path
     venv_path = getattr(args, 'import_env', None)
     if venv_path:
@@ -289,7 +292,7 @@ def handle_import(args):
                 ds_initials=getattr(args, 'ds_initials', None),
                 session=getattr(args, 'session', None),
                 compress_source=getattr(args, 'compress_source', False),
-                venv_path=venv_path
+                apptainer_dir=apptainer_dir
             )
     
     # Final summary
