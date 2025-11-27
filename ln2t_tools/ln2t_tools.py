@@ -292,6 +292,8 @@ def handle_import(args):
                 ds_initials=getattr(args, 'ds_initials', None),
                 session=getattr(args, 'session', None),
                 compress_source=getattr(args, 'compress_source', False),
+                use_phys2bids=getattr(args, 'phys2bids', False),
+                physio_config=getattr(args, 'physio_config', None),
                 apptainer_dir=apptainer_dir
             )
     

@@ -168,7 +168,10 @@ Example:
 - `spec2nii` (usually installed with spec2bids)
 
 ### Physio Import
-- `phys2bids` (optional - to be discussed)
+- **In-house processing** (default) - No external dependencies
+- `phys2bids` (optional - use with `--phys2bids` flag)
+- Configuration file: `~/sourcedata/<dataset>-sourcedata/configs/physio.json` (or `physio/config.json`)
+  - See `example_physio_config.json` in repository root
 
 ## Installation
 
@@ -262,10 +265,17 @@ After import, the tool will:
 
 ### Config file not found
 Ensure your config files are at:
+- `~/sourcedata/<dataset>-sourcedata/configs/dcm2bids.json`
+- `~/sourcedata/<dataset>-sourcedata/configs/spec2bids.json`
+- `~/sourcedata/<dataset>-sourcedata/configs/physio.json`
+
+Or legacy locations:
 - `~/sourcedata/<dataset>-sourcedata/dcm2bids/config.json`
 - `~/sourcedata/<dataset>-sourcedata/spec2bids/config.json`
+- `~/sourcedata/<dataset>-sourcedata/physio/config.json`
 
-Or place them in a `configs/` subdirectory.
+For physio import, if no config file is found, default values are used (DummyVolumes=5).
+You can also specify a custom config location with `--physio-config /path/to/config.json`.
 
 ### Virtual environment not found
 Specify custom path:

@@ -1,0 +1,7 @@
+{
+  "DummyVolumes": 5,
+  "_comment": "Configuration for in-house physiological data processing",
+  "_description": {
+    "DummyVolumes": "Number of dummy volumes at the start of fMRI acquisition. StartTime will be calculated as: 30s + (TR × DummyVolumes)"
+  }
+}

@@ -776,36 +776,117 @@ ln2t_tools import --dataset mydataset --participant-label 01 --datatype mrs --co
 
 ### Physio Import
 
-Convert GE physiological monitoring data (respiratory, PPG) to BIDS format with automatic fMRI matching:
+Convert GE physiological monitoring data (respiratory, PPG) to BIDS format with automatic fMRI matching.
+
+**By default**, uses in-house processing (simple and fast). Optionally use `--phys2bids` for phys2bids-based processing.
 
 ```bash
-# Import physio data (automatically matches to fMRI runs)
+# Import physio data using in-house processing (default)
+# Config file will be auto-detected from sourcedata/configs/physio.json
 ln2t_tools import --dataset mydataset --participant-label 01 --datatype physio
 
+# Or specify a custom config file location
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype physio \
+  --physio-config /path/to/custom_config.json
+
 # Import with session
-ln2t_tools import --dataset mydataset --participant-label 01 --datatype physio --session 01
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype physio \
+  --session 01
 
 # Import and compress source
-ln2t_tools import --dataset mydataset --participant-label 01 --datatype physio --compress-source
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype physio \
+  --compress-source
+
+# Use phys2bids instead (optional)
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype physio \
+  --phys2bids
 ```
 
+#### Configuration File
+
+The physio config file should be placed in your sourcedata directory:
+
+**Preferred location:**
+```
+~/sourcedata/{dataset}-sourcedata/configs/physio.json
+```
+
+**Legacy location (also supported):**
+```
+~/sourcedata/{dataset}-sourcedata/physio/config.json
+```
+
+If no config file is found in either location, the tool will use default values (DummyVolumes=5).
+
+Create a JSON configuration file with the following format:
+
+```json
+{
+  "DummyVolumes": 5
+}
+```
+
+**DummyVolumes**: Number of dummy/discard volumes at the start of the fMRI acquisition. The StartTime will be calculated as:
+```
+StartTime = -(30s + (TR × DummyVolumes))
+```
+
+Where:
+- 30s = GE scanner pre-recording period (hardcoded)
+- TR = Repetition time from fMRI JSON metadata
+- DummyVolumes = Number of dummy scans from config file
+- Negative sign indicates recording started BEFORE the first trigger
+
+Example: If TR=2.0s and DummyVolumes=5:
+```
+StartTime = -(30s + (2.0s × 5)) = -40.0s
+```
+
+See `example_physio_config.json` for a template.
+
+#### In-House Processing Details
+
+**Input**:
+- GE physio files: Single column of numerical values
+- Filename format: `{SIGNAL}Data_{SEQUENCE}_{TIMESTAMP}`
+  - RESP: Respiratory signal (25 Hz)
+  - PPG: Cardiac/photoplethysmography signal (100 Hz)
+
+**Output**:
+- TSV file: Single column with physio values (gzip compressed)
+- JSON sidecar with:
+  - `SamplingFrequency`: 25 Hz (RESP) or 100 Hz (PPG)
+  - `StartTime`: Calculated from config (30s + TR × DummyVolumes)
+  - `Columns`: BIDS recording type ("respiratory" or "cardiac")
+
 **How It Works**:
-1. Parses GE physio filenames to extract signal type (RESP/PPG) and end-of-recording timestamp
-2. Reads fMRI JSON metadata (AcquisitionTime, TR) and NIfTI files (number of volumes)
-3. Computes fMRI end time = start time + (TR × volumes)
-4. Matches physio files to fMRI runs based on timestamp (5-second tolerance)
-5. Auto-generates phys2bids heuristic file
-6. Converts to BIDS format using phys2bids (via Apptainer container)
+1. Parses GE physio filenames to extract signal type (RESP/PPG) and timestamp
+2. Reads fMRI JSON metadata (AcquisitionTime, TR) and NIfTI files (volumes)
+3. Matches physio files to fMRI runs based on timestamps (35s tolerance)
+4. Loads physio data (single column of values)
+5. Creates BIDS-compliant TSV.GZ and JSON files
+6. Calculates StartTime based on config file
+
+#### phys2bids Processing (Optional)
+
+When using `--phys2bids`:
+- Requires phys2bids Apptainer container (auto-built if missing)
+- Recipe: `apptainer_recipes/phys2bids.def`
+- Built to: `/opt/apptainer/phys2bids.phys2bids.latest.sif`
+- Auto-generates phys2bids heuristic file
+- Includes time column and trigger channel
+- Conversion logs: `~/sourcedata/{dataset}-sourcedata/phys2bids_logs/`
 
 **Filename Format**:
-- GE physio files: `{SIGNAL}{TYPE}_{SEQUENCE}_{DDMMYYYYHH_MM_SS_MS}`
 - Example: `RESPData_epiRTphysio_1124202515_54_58_279` (Nov 24, 2025, 15:54:58)
 - Data files are processed, Trig files are ignored
 
 **Requirements**:
 - fMRI data must already be in BIDS format in rawdata
 - Physio files in `~/sourcedata/{dataset}-sourcedata/physio/{ID}/`
-- phys2bids Apptainer container (auto-built from Docker Hub if missing)
+
+**Output**:
+- Converted BIDS files: `~/rawdata/{dataset}-rawdata/sub-{ID}/func/`
 
 ### Import All Datatypes
 
@@ -964,8 +1045,15 @@ ln2t_tools expects and creates the following structure:
   ├── nipreps.fmriprep.25.1.4.sif
   ├── pennlinc.qsiprep.1.0.1.sif
   ├── pennlinc.qsirecon.1.1.1.sif
-  └── meldproject.meld_graph.v2.2.3.sif
+  ├── meldproject.meld_graph.v2.2.3.sif
+  └── phys2bids.phys2bids.latest.sif
 ```
+
+**Apptainer Recipe Files**:
+ln2t_tools includes Apptainer recipe files for building containers:
+- `apptainer_recipes/phys2bids.def`: Recipe for phys2bids container
+- Containers are automatically built on first use
+- See `apptainer_recipes/README.md` for manual build instructions
 
 ---
 

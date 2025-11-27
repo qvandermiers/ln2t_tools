@@ -1,4 +1,7 @@
-"""Physiological data to BIDS conversion using phys2bids."""
+"""Physiological data to BIDS conversion.
+
+By default uses in-house processing. Can optionally use phys2bids.
+"""
 
 import logging
 import subprocess
@@ -11,6 +14,83 @@ from datetime import datetime, timedelta
 import nibabel as nib
 
 logger = logging.getLogger(__name__)
+
+
+def import_physio(
+    dataset: str,
+    participant_labels: List[str],
+    sourcedata_dir: Path,
+    rawdata_dir: Path,
+    ds_initials: Optional[str] = None,
+    session: Optional[str] = None,
+    compress_source: bool = False,
+    use_phys2bids: bool = False,
+    physio_config: Optional[Path] = None,
+    apptainer_dir: Path = Path("/opt/apptainer")
+) -> bool:
+    """Import physiological data to BIDS format.
+    
+    By default uses in-house processing. Set use_phys2bids=True to use phys2bids instead.
+    
+    Parameters
+    ----------
+    dataset : str
+        Dataset name
+    participant_labels : List[str]
+        List of participant IDs (without 'sub-' prefix)
+    sourcedata_dir : Path
+        Path to sourcedata directory
+    rawdata_dir : Path
+        Path to BIDS rawdata directory
+    ds_initials : Optional[str]
+        Dataset initials prefix
+    session : Optional[str]
+        Session label (without 'ses-' prefix)
+    compress_source : bool
+        Whether to compress source files after successful conversion
+    use_phys2bids : bool
+        If True, use phys2bids; otherwise use in-house processing (default: False)
+    physio_config : Optional[Path]
+        Path to physiological data configuration file (for in-house processing)
+    apptainer_dir : Path
+        Directory containing Apptainer images (for phys2bids only)
+        
+    Returns
+    -------
+    bool
+        True if import successful, False otherwise
+    """
+    if use_phys2bids:
+        logger.info("Using phys2bids for physiological data import")
+        return import_physio_phys2bids(
+            dataset=dataset,
+            participant_labels=participant_labels,
+            sourcedata_dir=sourcedata_dir,
+            rawdata_dir=rawdata_dir,
+            ds_initials=ds_initials,
+            session=session,
+            compress_source=compress_source,
+            apptainer_dir=apptainer_dir
+        )
+    else:
+        logger.info("Using in-house processing for physiological data import")
+        from ln2t_tools.import_data.physio_inhouse import (
+            import_physio_inhouse,
+            load_physio_config
+        )
+        
+        # Load configuration (auto-detects from sourcedata_dir if not provided)
+        config = load_physio_config(physio_config, sourcedata_dir)
+        
+        return import_physio_inhouse(
+            dataset=dataset,
+            participant_labels=participant_labels,
+            sourcedata_dir=sourcedata_dir,
+            rawdata_dir=rawdata_dir,
+            config=config,
+            ds_initials=ds_initials,
+            session=session
+        )
 
 
 def get_phys2bids_container(apptainer_dir: Path = Path("/opt/apptainer")) -> Path:
@@ -58,7 +138,9 @@ def get_phys2bids_container(apptainer_dir: Path = Path("/opt/apptainer")) -> Pat
     return container_path
 
 
-def import_physio(
+
+
+def import_physio_phys2bids(
     dataset: str,
     participant_labels: List[str],
     sourcedata_dir: Path,
@@ -213,6 +295,8 @@ def import_physio(
                 physio_file=match['physio_file'],
                 physio_dir=physio_source_dir,
                 output_dir=rawdata_dir,
+                sourcedata_dir=sourcedata_dir,
+                dataset=dataset,
                 participant_id=participant_id,
                 session=session,
                 heur_file=heur_file,
@@ -251,11 +335,11 @@ def parse_physio_files(physio_dir: Path) -> List[Dict]:
     GE physio files have format: {SIGNAL}{TYPE}_{SEQUENCE}_{TIMESTAMP}
     - SIGNAL: RESP (respiratory) or PPG (photoplethysmography)
     - TYPE: Data or Trig (trigger)
-    - TIMESTAMP: End time of recording in format DDMMYYYYHH_MM_SS_MS
+    - TIMESTAMP: End time of recording in format MMDDYYYYHH_MM_SS_MS
     
     Examples:
-    - RESPData_epiRTphysio_1124202515_54_58_279
-    - PPGData_epiRTphysio_1124202516_28_57_165
+    - RESPData_epiRTphysio_1124202515_54_58_279 → Nov 24, 2025, 15:54:58
+    - PPGData_epiRTphysio_1124202516_28_57_165 → Nov 24, 2025, 16:28:57
     - PPGTrig_epiRTphysio_1124202515_32_10_133 (ignored - trigger file)
     
     Parameters
@@ -271,7 +355,7 @@ def parse_physio_files(physio_dir: Path) -> List[Dict]:
     physio_files = []
     
     # Pattern: RESPData_epiRTphysio_1124202515_54_58_279
-    # Format: {SIGNAL}{TYPE}_{SEQUENCE}_{DDMMYYYYHH_MM_SS_MS}
+    # Format: {SIGNAL}{TYPE}_{SEQUENCE}_{MMDDYYYYHH_MM_SS_MS}
     pattern = re.compile(r'^(RESP|PPG)(Data|Trig)_([^_]+)_(\d{10})_(\d+)_(\d+)_(\d+)$')
     
     for file in physio_dir.iterdir():
@@ -291,10 +375,10 @@ def parse_physio_files(physio_dir: Path) -> List[Dict]:
             continue
         
         # Parse timestamp (end of recording)
-        # Format: DDMMYYYYHH_MM_SS_MS where datetime_str = DDMMYYYYHH
+        # Format: MMDDYYYYHH_MM_SS_MS where datetime_str = MMDDYYYYHH
         try:
-            day = int(datetime_str[:2])
-            month = int(datetime_str[2:4])
+            month = int(datetime_str[:2])
+            day = int(datetime_str[2:4])
             year = int(datetime_str[4:8])
             hour = int(datetime_str[8:10])
             
@@ -324,9 +408,13 @@ def match_physio_to_fmri(
     func_dir: Path,
     participant_id: str,
     session: Optional[str] = None,
-    tolerance_sec: float = 5.0
+    tolerance_sec: float = 35.0
 ) -> List[Dict]:
     """Match physio files to fMRI runs based on timestamps.
+    
+    GE physio recordings start 30 seconds before fMRI acquisition,
+    so we use a 35-second tolerance to account for this offset plus
+    small timing variations.
     
     Parameters
     ----------
@@ -339,7 +427,8 @@ def match_physio_to_fmri(
     session : Optional[str]
         Session label
     tolerance_sec : float
-        Time tolerance in seconds for matching (default: 5.0)
+        Time tolerance in seconds for matching (default: 35.0)
+        Accounts for 30s pre-recording + 5s timing variation
         
     Returns
     -------
@@ -549,6 +638,8 @@ def run_phys2bids(
     physio_file: Path,
     physio_dir: Path,
     output_dir: Path,
+    sourcedata_dir: Path,
+    dataset: str,
     participant_id: str,
     session: Optional[str],
     heur_file: Path,
@@ -566,6 +657,10 @@ def run_phys2bids(
         Directory containing physio files
     output_dir : Path
         Output BIDS directory
+    sourcedata_dir : Path
+        Source data directory (for code/logs)
+    dataset : str
+        Dataset name
     participant_id : str
         Participant ID
     session : Optional[str]
@@ -586,11 +681,16 @@ def run_phys2bids(
     """
     logger.info(f"\nRunning phys2bids for {physio_file.name}")
     
+    # Create temporary code directory in sourcedata
+    code_dir = sourcedata_dir / "phys2bids_logs"
+    code_dir.mkdir(parents=True, exist_ok=True)
+    
     # Build apptainer command
     cmd = [
         'apptainer', 'exec',
         '-B', f'{physio_dir}:/data/input',
         '-B', f'{output_dir}:/data/output',
+        '-B', f'{code_dir}:/data/output/code',  # Redirect code folder to sourcedata
         '-B', f'{heur_file.parent}:/data/heur',
         str(container_path),
         'phys2bids',
@@ -620,6 +720,7 @@ def run_phys2bids(
         )
         
         logger.info(f"✓ phys2bids completed successfully")
+        logger.info(f"  Logs saved to: {code_dir}")
         if result.stdout:
             logger.debug(f"Output: {result.stdout}")
         

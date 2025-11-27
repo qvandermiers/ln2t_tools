@@ -334,6 +334,19 @@ def parse_args() -> argparse.Namespace:
         help="Path to Python virtual environment for import tools (default: ~/venvs/general_purpose_env)"
     )
 
+    parser.add_argument(
+        "--phys2bids",
+        action="store_true",
+        help="Use phys2bids for physiological data import (default: use in-house processing)"
+    )
+
+    parser.add_argument(
+        "--physio-config",
+        type=Path,
+        help="Path to physiological data configuration file (JSON format with DummyVolumes). "
+             "If not specified, auto-detects from sourcedata/configs/physio.json or physio/config.json"
+    )
+
     return parser.parse_args()
 
 
