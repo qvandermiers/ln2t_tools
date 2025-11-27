@@ -280,8 +280,77 @@ def run_pydeface(
             executable='/bin/bash'
         )
         logger.info("✓ Defacing completed successfully")
+        
+        # Update JSON sidecars to mark images as defaced
+        update_defaced_metadata(rawdata_dir, participant_labels, session)
+        
         return True
         
     except subprocess.CalledProcessError as e:
         logger.error(f"Defacing failed: {e.stderr}")
         return False
+
+
+def update_defaced_metadata(
+    rawdata_dir: Path,
+    participant_labels: List[str],
+    session: Optional[str] = None
+) -> None:
+    """Update JSON sidecar files to indicate images have been defaced.
+    
+    Parameters
+    ----------
+    rawdata_dir : Path
+        Path to BIDS rawdata directory
+    participant_labels : List[str]
+        List of participant IDs
+    session : Optional[str]
+        Session label if applicable
+    """
+    import json
+    from datetime import datetime
+    
+    for participant in participant_labels:
+        participant_id = participant.replace('sub-', '')
+        subj_dir = rawdata_dir / f"sub-{participant_id}"
+        
+        if not subj_dir.exists():
+            continue
+        
+        # Determine which directory to search
+        if session:
+            search_dir = subj_dir / f"ses-{session}" / "anat"
+        else:
+            search_dir = subj_dir / "anat"
+        
+        if not search_dir.exists():
+            continue
+        
+        # Find all anatomical NIfTI files
+        for nii_file in search_dir.glob("*.nii*"):
+            # Find corresponding JSON file
+            json_file = nii_file.parent / f"{nii_file.name.split('.nii')[0]}.json"
+            
+            if json_file.exists():
+                try:
+                    # Read existing JSON
+                    with open(json_file, 'r') as f:
+                        metadata = json.load(f)
+                    
+                    # Add defacing information
+                    metadata['Defaced'] = True
+                    metadata['DefacingMethod'] = 'pydeface v2.0.6'
+                    metadata['DefacingTimestamp'] = datetime.now().isoformat()
+                    
+                    # Write updated JSON
+                    with open(json_file, 'w') as f:
+                        json.dump(metadata, f, indent=4)
+                    
+                    logger.debug(f"Updated defacing metadata in {json_file.name}")
+                    
+                except Exception as e:
+                    logger.warning(f"Could not update metadata for {json_file.name}: {e}")
+            else:
+                logger.debug(f"No JSON sidecar found for {nii_file.name}")
+    
+    logger.info("✓ Updated JSON metadata for defaced images")
