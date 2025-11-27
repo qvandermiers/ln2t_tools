@@ -5,7 +5,7 @@ _ln2t_tools_completion() {
     _init_completion || return
 
     # List of tools
-    local tools="freesurfer fmriprep qsiprep qsirecon meld_graph"
+    local tools="freesurfer fmriprep qsiprep qsirecon meld_graph import"
     
     # Function to get dataset name from command line
     _get_dataset_name() {
@@ -51,7 +51,7 @@ _ln2t_tools_completion() {
 
     # Handle options
     case $prev in
-        freesurfer|fmriprep|qsiprep|qsirecon|meld_graph)
+        freesurfer|fmriprep|qsiprep|qsirecon|meld_graph|import)
             COMPREPLY=( $(compgen -W "--dataset" -- "$cur") )
             return 0
             ;;
@@ -70,6 +70,16 @@ _ln2t_tools_completion() {
                 COMPREPLY=( $(compgen -W "${subjects}" -- "$cur") )
                 return 0
             fi
+            ;;
+        --datatype)
+            # Completion for import datatypes
+            COMPREPLY=( $(compgen -W "dicom physio mrs all" -- "$cur") )
+            return 0
+            ;;
+        --denoise-method)
+            # Completion for QSIPrep denoise methods
+            COMPREPLY=( $(compgen -W "dwidenoise patch2self none" -- "$cur") )
+            return 0
             ;;
         *)
             # Other options based on context
@@ -93,6 +103,11 @@ _ln2t_tools_completion() {
             # Add MELD Graph specific options
             if [[ ${words[1]} == "meld_graph" ]]; then
                 opts+=" --fs-version"
+            fi
+            
+            # Add Import specific options
+            if [[ ${words[1]} == "import" ]]; then
+                opts+=" --datatype --session --ds-initials --compress-source --skip-deface --import-env"
             fi
             
             COMPREPLY=( $(compgen -W "${opts}" -- "$cur") )
