@@ -1,0 +1,56 @@
+Bootstrap: docker
+From: python:3.9-slim
+
+%labels
+    Author ln2t_tools
+    Version 2.10.0
+    Description phys2bids - Physiological data conversion to BIDS
+
+%help
+    This container provides phys2bids for converting physiological data to BIDS format.
+    
+    Usage:
+        apptainer exec phys2bids.sif phys2bids --help
+    
+    Example:
+        apptainer exec phys2bids.sif phys2bids \
+            -in input.txt \
+            -indir /data/input \
+            -outdir /data/output \
+            -sub 001 \
+            -ses 01 \
+            -heur heuristic.py \
+            -tr 2.0 \
+            -ntp 200
+
+%post
+    # Update and install system dependencies
+    apt-get update && apt-get install -y \
+        git \
+        build-essential \
+        && rm -rf /var/lib/apt/lists/*
+    
+    # Upgrade pip
+    pip install --no-cache-dir --upgrade pip setuptools wheel
+    
+    # Install numpy first (compatible version for Python 3.9)
+    pip install --no-cache-dir "numpy<1.24,>=1.10"
+    
+    # Install phys2bids and its dependencies
+    pip install --no-cache-dir phys2bids==2.10.0
+    
+    # Verify installation
+    phys2bids --version
+
+%environment
+    export LC_ALL=C
+    export LANGUAGE=en_US:en
+    export LANG=en_US.UTF-8
+
+%runscript
+    exec phys2bids "$@"
+
+%test
+    # Test that phys2bids is installed and working
+    phys2bids --version
+    python -c "import phys2bids; print('phys2bids version:', phys2bids.__version__)"

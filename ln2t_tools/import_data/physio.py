@@ -32,12 +32,22 @@ def get_phys2bids_container(apptainer_dir: Path = Path("/opt/apptainer")) -> Pat
     
     if not container_path.exists():
         logger.info(f"phys2bids container not found at {container_path}")
-        logger.info("Building phys2bids container from Docker Hub...")
+        logger.info("Building phys2bids container from recipe file...")
         apptainer_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Find the recipe file
+        recipe_file = Path(__file__).parent.parent.parent / "apptainer_recipes" / "phys2bids.def"
+        
+        if not recipe_file.exists():
+            logger.error(f"Recipe file not found: {recipe_file}")
+            logger.error("Please ensure the phys2bids.def recipe file is in the apptainer_recipes directory")
+            raise FileNotFoundError(f"Recipe file not found: {recipe_file}")
+        
+        logger.info(f"Using recipe file: {recipe_file}")
         
         try:
             subprocess.run(
-                ['apptainer', 'build', str(container_path), 'docker://phys2bids/phys2bids:latest'],
+                ['apptainer', 'build', str(container_path), str(recipe_file)],
                 check=True
             )
             logger.info(f"Successfully built phys2bids container at {container_path}")
