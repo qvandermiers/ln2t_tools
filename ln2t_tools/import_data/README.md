@@ -73,14 +73,14 @@ ln2t_tools import \
 
 This will create `.tar.gz` archives of the source data after successful import.
 
-### Skip Defacing
+### Enable Defacing
 
 ```bash
 ln2t_tools import \
   --dataset <dataset-name> \
   --participant-label 001 \
   --datatype dicom \
-  --skip-deface
+  --deface
 ```
 
 ### Custom Virtual Environment
@@ -293,7 +293,8 @@ Install spec2bids or provide path to custom installation.
 - Dataset initials (`--ds-initials`) help match source directories to participants
 - If omitted, the tool tries to find matching directories by participant ID
 - Compression creates `.tar.gz` archives and preserves original directories
-- Defacing runs automatically after DICOM import (unless `--skip-deface`)
+- Defacing is optional and can be enabled with `--deface` flag
+- A minimal `dataset_description.json` is automatically created if needed for defacing
 - The tool cleans up `tmp_dcm2bids` directory after processing
 
 ## Future Enhancements

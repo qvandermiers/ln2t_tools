@@ -113,7 +113,7 @@ _ln2t_tools_completion() {
             
             # Add Import specific options
             if [[ ${words[1]} == "import" ]]; then
-                opts+=" --datatype --session --ds-initials --compress-source --skip-deface --import-env"
+                opts+=" --datatype --session --ds-initials --compress-source --deface --import-env"
             fi
             
             COMPREPLY=( $(compgen -W "${opts}" -- "$cur") )

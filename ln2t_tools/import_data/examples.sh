@@ -36,13 +36,13 @@ ln2t_tools import \
   --ds-initials HP \
   --compress-source
 
-# Example 5: Skip defacing
-echo "Example 5: DICOM import without defacing"
+# Example 5: Enable defacing
+echo "Example 5: DICOM import with defacing"
 ln2t_tools import \
   --dataset 2024-Test_Dataset \
   --participant-label 001 \
   --datatype dicom \
-  --skip-deface
+  --deface
 
 # Example 6: Custom virtual environment
 echo "Example 6: Using custom virtual environment"

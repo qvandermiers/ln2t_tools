@@ -125,17 +125,41 @@ def import_mrs(
     success_count = 0
     failed_participants = []
     
+    # If ds_initials not provided, extract from dataset name
+    # Dataset format: 2024-Fantastic_Fox-123456789 -> FF
+    if ds_initials is None:
+        # Extract initials from dataset name (e.g., "Fantastic_Fox" -> "FF")
+        # Split by '-', take the middle part (name), then get first letter of each word
+        parts = dataset.split('-')
+        if len(parts) >= 2:
+            name_part = parts[1]  # e.g., "Fantastic_Fox"
+            words = name_part.replace('_', ' ').split()
+            ds_initials = ''.join([w[0].upper() for w in words if w])
+            logger.info(f"Inferred dataset initials: {ds_initials}")
+        else:
+            logger.warning(f"Could not infer dataset initials from '{dataset}', will use flexible matching")
+    
     for participant in participant_labels:
         participant_id = participant.replace('sub-', '')
         
-        # Determine source directory name
+        # Determine source directory name using strict pattern
         if ds_initials:
+            # Use strict naming convention: AB042 or AB042SES4
             if session:
                 source_name = f"{ds_initials}{participant_id}SES{session}"
             else:
                 source_name = f"{ds_initials}{participant_id}"
+            
+            source_path = mrs_dir / source_name
+            
+            if not source_path.exists():
+                logger.error(f"Source MRS directory not found: {source_path}")
+                logger.error(f"Expected naming convention: {ds_initials}{participant_id}" + 
+                           (f"SES{session}" if session else ""))
+                failed_participants.append(participant_id)
+                continue
         else:
-            # Try to find matching directory
+            # Fallback to flexible matching if ds_initials could not be determined
             pattern = f"*{participant_id}*"
             if session:
                 pattern = f"*{participant_id}*{session}*"
@@ -143,19 +167,13 @@ def import_mrs(
             matches = list(mrs_dir.glob(pattern))
             if not matches:
                 logger.error(f"No MRS directory found matching {pattern} in {mrs_dir}")
+                logger.error(f"Hint: Use --ds-initials flag for strict directory matching")
                 failed_participants.append(participant_id)
                 continue
             elif len(matches) > 1:
                 logger.warning(f"Multiple matches for {pattern}: {[m.name for m in matches]}")
                 logger.info(f"Using first match: {matches[0].name}")
-            source_name = matches[0].name
-        
-        source_path = mrs_dir / source_name
-        
-        if not source_path.exists():
-            logger.error(f"Source MRS directory not found: {source_path}")
-            failed_participants.append(participant_id)
-            continue
+            source_path = matches[0]
         
         # Run spec2bids
         logger.info(f"Running spec2bids for {participant_id}...")
@@ -182,15 +200,15 @@ def import_mrs(
             
             # Compress source files if requested
             if compress_source:
-                compressed_file = mrs_dir / f"{source_name}.tar.gz"
+                compressed_file = mrs_dir / f"{source_path.name}.tar.gz"
                 if not compressed_file.exists():
-                    logger.info(f"Compressing {source_name}...")
+                    logger.info(f"Compressing {source_path.name}...")
                     try:
                         with tarfile.open(compressed_file, "w:gz") as tar:
-                            tar.add(source_path, arcname=source_name)
+                            tar.add(source_path, arcname=source_path.name)
                         logger.info(f"✓ Created {compressed_file.name}")
                     except Exception as e:
-                        logger.error(f"Failed to compress {source_name}: {e}")
+                        logger.error(f"Failed to compress {source_path.name}: {e}")
             
         except subprocess.CalledProcessError as e:
             logger.error(f"✗ Failed to import MRS data for {participant_id}: {e.stderr}")

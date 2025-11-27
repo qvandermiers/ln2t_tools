@@ -254,7 +254,7 @@ def handle_import(args):
                 ds_initials=getattr(args, 'ds_initials', None),
                 session=getattr(args, 'session', None),
                 compress_source=getattr(args, 'compress_source', False),
-                skip_deface=getattr(args, 'skip_deface', False),
+                deface=getattr(args, 'deface', False),
                 venv_path=venv_path
             )
         

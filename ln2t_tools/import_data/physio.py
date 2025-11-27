@@ -61,21 +61,66 @@ def import_physio(
     
     # Check if physio directory exists
     physio_dir = sourcedata_dir / "physio"
-    if physio_dir.exists():
-        logger.info(f"Found physio directory: {physio_dir}")
-        # List available files
-        physio_files = list(physio_dir.rglob("*"))
-        logger.info(f"  Contains {len(physio_files)} files/directories")
-        
-        # Show sample file types
-        extensions = set()
-        for f in physio_files:
-            if f.is_file():
-                extensions.add(f.suffix)
-        if extensions:
-            logger.info(f"  File types: {', '.join(sorted(extensions))}")
-    else:
+    if not physio_dir.exists():
         logger.info(f"No physio directory found at {physio_dir}")
+        return False
+    
+    logger.info(f"Found physio directory: {physio_dir}")
+    
+    # If ds_initials not provided, extract from dataset name
+    # Dataset format: 2024-Fantastic_Fox-123456789 -> FF
+    if ds_initials is None:
+        # Extract initials from dataset name (e.g., "Fantastic_Fox" -> "FF")
+        # Split by '-', take the middle part (name), then get first letter of each word
+        parts = dataset.split('-')
+        if len(parts) >= 2:
+            name_part = parts[1]  # e.g., "Fantastic_Fox"
+            words = name_part.replace('_', ' ').split()
+            ds_initials = ''.join([w[0].upper() for w in words if w])
+            logger.info(f"Inferred dataset initials: {ds_initials}")
+        else:
+            logger.warning(f"Could not infer dataset initials from '{dataset}', will use flexible matching")
+    
+    # Check what directories exist for the requested participants
+    for participant in participant_labels:
+        participant_id = participant.replace('sub-', '')
+        
+        # Determine expected source directory name using strict pattern
+        if ds_initials:
+            # Use strict naming convention: AB042 or AB042SES4
+            if session:
+                expected_name = f"{ds_initials}{participant_id}SES{session}"
+            else:
+                expected_name = f"{ds_initials}{participant_id}"
+            
+            source_path = physio_dir / expected_name
+            
+            if source_path.exists():
+                physio_files = list(source_path.rglob("*"))
+                logger.info(f"  Found {expected_name}: {len(physio_files)} files/directories")
+                
+                # Show sample file types
+                extensions = set()
+                for f in physio_files:
+                    if f.is_file():
+                        extensions.add(f.suffix)
+                if extensions:
+                    logger.info(f"    File types: {', '.join(sorted(extensions))}")
+            else:
+                logger.info(f"  Expected directory not found: {expected_name}")
+        else:
+            # Fallback to flexible matching
+            pattern = f"*{participant_id}*"
+            if session:
+                pattern = f"*{participant_id}*{session}*"
+            
+            matches = list(physio_dir.glob(pattern))
+            if matches:
+                for match in matches:
+                    physio_files = list(match.rglob("*"))
+                    logger.info(f"  Found {match.name}: {len(physio_files)} files/directories")
+            else:
+                logger.info(f"  No directory found matching {pattern}")
     
     return False
 

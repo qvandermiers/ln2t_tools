@@ -18,7 +18,7 @@ def import_dicom(
     ds_initials: Optional[str] = None,
     session: Optional[str] = None,
     compress_source: bool = False,
-    skip_deface: bool = False,
+    deface: bool = False,
     venv_path: Optional[Path] = None
 ) -> bool:
     """Import DICOM data to BIDS format using dcm2bids.
@@ -39,8 +39,8 @@ def import_dicom(
         Session label (without 'ses-' prefix)
     compress_source : bool
         Whether to compress source DICOM directories after successful conversion
-    skip_deface : bool
-        Skip defacing anatomical images
+    deface : bool
+        Deface anatomical images after import
     venv_path : Optional[Path]
         Path to virtual environment containing dcm2bids
         
@@ -92,17 +92,41 @@ def import_dicom(
     success_count = 0
     failed_participants = []
     
+    # If ds_initials not provided, extract from dataset name
+    # Dataset format: 2024-Fantastic_Fox-123456789 -> FF
+    if ds_initials is None:
+        # Extract initials from dataset name (e.g., "Fantastic_Fox" -> "FF")
+        # Split by '-', take the middle part (name), then get first letter of each word
+        parts = dataset.split('-')
+        if len(parts) >= 2:
+            name_part = parts[1]  # e.g., "Fantastic_Fox"
+            words = name_part.replace('_', ' ').split()
+            ds_initials = ''.join([w[0].upper() for w in words if w])
+            logger.info(f"Inferred dataset initials: {ds_initials}")
+        else:
+            logger.warning(f"Could not infer dataset initials from '{dataset}', will use flexible matching")
+    
     for participant in participant_labels:
         participant_id = participant.replace('sub-', '')  # Remove prefix if present
         
-        # Determine source directory name
+        # Determine source directory name using strict pattern
         if ds_initials:
+            # Use strict naming convention: AB042 or AB042SES4
             if session:
                 source_name = f"{ds_initials}{participant_id}SES{session}"
             else:
                 source_name = f"{ds_initials}{participant_id}"
+            
+            source_path = dicom_dir / source_name
+            
+            if not source_path.exists():
+                logger.error(f"Source DICOM directory not found: {source_path}")
+                logger.error(f"Expected naming convention: {ds_initials}{participant_id}" + 
+                           (f"SES{session}" if session else ""))
+                failed_participants.append(participant_id)
+                continue
         else:
-            # Try to find matching directory
+            # Fallback to flexible matching if ds_initials could not be determined
             pattern = f"*{participant_id}*"
             if session:
                 pattern = f"*{participant_id}*{session}*"
@@ -110,31 +134,25 @@ def import_dicom(
             matches = list(dicom_dir.glob(pattern))
             if not matches:
                 logger.error(f"No DICOM directory found matching {pattern} in {dicom_dir}")
+                logger.error(f"Hint: Use --ds-initials flag for strict directory matching")
                 failed_participants.append(participant_id)
                 continue
             elif len(matches) > 1:
                 logger.warning(f"Multiple matches for {pattern}: {[m.name for m in matches]}")
                 logger.info(f"Using first match: {matches[0].name}")
-            source_name = matches[0].name
-        
-        source_path = dicom_dir / source_name
-        
-        if not source_path.exists():
-            logger.error(f"Source DICOM directory not found: {source_path}")
-            failed_participants.append(participant_id)
-            continue
+            source_path = matches[0]
         
         # Compress source data if requested and not already compressed
         if compress_source:
-            compressed_file = dicom_dir / f"{source_name}.tar.gz"
+            compressed_file = dicom_dir / f"{source_path.name}.tar.gz"
             if not compressed_file.exists():
-                logger.info(f"Compressing {source_name}...")
+                logger.info(f"Compressing {source_path.name}...")
                 try:
                     with tarfile.open(compressed_file, "w:gz") as tar:
-                        tar.add(source_path, arcname=source_name)
+                        tar.add(source_path, arcname=source_path.name)
                     logger.info(f"✓ Created {compressed_file.name}")
                 except Exception as e:
-                    logger.error(f"Failed to compress {source_name}: {e}")
+                    logger.error(f"Failed to compress {source_path.name}: {e}")
         
         # Run dcm2bids
         logger.info(f"Running dcm2bids for {participant_id}...")
@@ -171,8 +189,22 @@ def import_dicom(
         shutil.rmtree(tmp_dir)
     
     # Run defacing if requested
-    if not skip_deface and success_count > 0:
+    if deface and success_count > 0:
         logger.info("Running pydeface on anatomical images...")
+        
+        # Ensure dataset_description.json exists (required by pydeface BIDS validation)
+        dataset_desc_file = rawdata_dir / "dataset_description.json"
+        if not dataset_desc_file.exists():
+            logger.info("Creating dataset_description.json...")
+            import json
+            dataset_desc = {
+                "Name": dataset,
+                "BIDSVersion": "1.9.0"
+            }
+            with open(dataset_desc_file, 'w') as f:
+                json.dump(dataset_desc, f, indent=4)
+            logger.info(f"✓ Created {dataset_desc_file}")
+        
         deface_success = run_pydeface(
             rawdata_dir,
             participant_labels=[p for p in participant_labels if p not in failed_participants],

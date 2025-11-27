@@ -323,9 +323,9 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--skip-deface",
+        "--deface",
         action="store_true",
-        help="Skip defacing step for anatomical images (import tool only)"
+        help="Deface anatomical images after import (import tool only)"
     )
 
     parser.add_argument(
