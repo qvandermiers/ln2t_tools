@@ -3,7 +3,10 @@
 Supports SLURM-based HPC clusters with configurable connection settings.
 """
 
+import atexit
 import logging
+import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -12,9 +15,126 @@ import tempfile
 
 logger = logging.getLogger(__name__)
 
+# Global SSH ControlMaster state
+_ssh_control_path: Optional[str] = None
+_ssh_control_process: Optional[subprocess.Popen] = None
+
+
+def _get_control_path() -> str:
+    """Get or create the SSH ControlMaster socket path."""
+    global _ssh_control_path
+    if _ssh_control_path is None:
+        # Create a unique socket path in /tmp
+        _ssh_control_path = f"/tmp/ln2t_ssh_control_{os.getpid()}"
+    return _ssh_control_path
+
+
+def _cleanup_ssh_control():
+    """Cleanup SSH ControlMaster connection on exit."""
+    global _ssh_control_process, _ssh_control_path
+    if _ssh_control_process is not None:
+        try:
+            _ssh_control_process.terminate()
+            _ssh_control_process.wait(timeout=5)
+        except Exception:
+            pass
+        _ssh_control_process = None
+    if _ssh_control_path and Path(_ssh_control_path).exists():
+        try:
+            Path(_ssh_control_path).unlink()
+        except Exception:
+            pass
+
+
+# Register cleanup on exit
+atexit.register(_cleanup_ssh_control)
+
+
+def start_ssh_control_master(username: str, hostname: str, keyfile: str, gateway: Optional[str] = None) -> bool:
+    """Start an SSH ControlMaster connection for connection reuse.
+    
+    This establishes a persistent SSH connection that subsequent SSH commands
+    can reuse, avoiding rate limiting issues from rapid successive connections.
+    
+    Parameters
+    ----------
+    username : str
+        Username for HPC cluster
+    hostname : str
+        Hostname for HPC cluster
+    keyfile : str
+        Path to SSH private key file
+    gateway : Optional[str]
+        ProxyJump gateway hostname
+        
+    Returns
+    -------
+    bool
+        True if ControlMaster started successfully
+    """
+    global _ssh_control_process
+    
+    # If already running, check if it's still alive
+    if _ssh_control_process is not None:
+        if _ssh_control_process.poll() is None:
+            return True  # Still running
+        else:
+            _ssh_control_process = None  # Died, need to restart
+    
+    control_path = _get_control_path()
+    keyfile_expanded = str(Path(keyfile).expanduser())
+    
+    cmd = [
+        "ssh",
+        "-i", keyfile_expanded,
+        "-o", "ConnectTimeout=15",
+        "-o", "ControlMaster=yes",
+        "-o", f"ControlPath={control_path}",
+        "-o", "ControlPersist=300",  # Keep connection alive for 5 minutes
+        "-o", "ServerAliveInterval=30",
+        "-o", "ServerAliveCountMax=3",
+        "-N",  # Don't execute remote command, just hold connection
+    ]
+    
+    if gateway:
+        cmd.extend(["-J", f"{username}@{gateway}"])
+    
+    cmd.append(f"{username}@{hostname}")
+    
+    try:
+        logger.debug(f"Starting SSH ControlMaster: {' '.join(cmd)}")
+        _ssh_control_process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        # Give it a moment to establish
+        time.sleep(1)
+        
+        # Check if it's still running (didn't fail immediately)
+        if _ssh_control_process.poll() is not None:
+            stderr = _ssh_control_process.stderr.read().decode() if _ssh_control_process.stderr else ""
+            logger.error(f"SSH ControlMaster failed to start: {stderr}")
+            _ssh_control_process = None
+            return False
+        
+        logger.info(f"✓ SSH ControlMaster established to {username}@{hostname}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to start SSH ControlMaster: {e}")
+        return False
+
+
+def stop_ssh_control_master():
+    """Stop the SSH ControlMaster connection."""
+    _cleanup_ssh_control()
+
 
 def get_ssh_command(username: str, hostname: str, keyfile: str, gateway: Optional[str] = None) -> list:
     """Get SSH command with proper key configuration and optional ProxyJump.
+    
+    If an SSH ControlMaster is active, the command will reuse that connection.
     
     Parameters
     ----------
@@ -32,11 +152,19 @@ def get_ssh_command(username: str, hostname: str, keyfile: str, gateway: Optiona
     list
         SSH command with options
     """
+    control_path = _get_control_path()
+    
     cmd = [
         "ssh",
         "-i", str(Path(keyfile).expanduser()),
         "-o", "ConnectTimeout=10",
     ]
+    
+    # If ControlMaster socket exists, use it
+    if Path(control_path).exists():
+        cmd.extend([
+            "-o", f"ControlPath={control_path}",
+        ])
     
     if gateway:
         cmd.extend(["-J", f"{username}@{gateway}"])
@@ -181,7 +309,7 @@ def validate_hpc_config(args) -> None:
 
 
 def test_ssh_connection(username: str, hostname: str, keyfile: str, gateway: Optional[str] = None) -> bool:
-    """Test SSH connection to HPC.
+    """Test SSH connection to HPC and establish ControlMaster for connection reuse.
     
     Parameters
     ----------
@@ -199,6 +327,10 @@ def test_ssh_connection(username: str, hostname: str, keyfile: str, gateway: Opt
     bool
         True if connection successful, False otherwise
     """
+    # First, start the ControlMaster for connection reuse
+    if not start_ssh_control_master(username, hostname, keyfile, gateway):
+        logger.warning("Could not establish SSH ControlMaster, will use individual connections")
+    
     try:
         cmd = get_ssh_command(username, hostname, keyfile, gateway) + ["echo", "connected"]
         result = subprocess.run(
@@ -244,15 +376,25 @@ def check_remote_path_exists(username: str, hostname: str, keyfile: str, gateway
         True if path exists, False otherwise
     """
     try:
-        cmd = get_ssh_command(username, hostname, keyfile, gateway) + [
-            f"test -e {remote_path} && echo 'exists' || echo 'not_found'"
-        ]
+        # Quote the remote_path to avoid remote shell word-splitting/expansion issues
+        remote_test = f"test -e '{remote_path}' && echo 'exists' || echo 'not_found'"
+        cmd = get_ssh_command(username, hostname, keyfile, gateway) + [remote_test]
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=10
         )
+
+        # If the test failed, log the command and returned output to help debugging
+        if not (result.returncode == 0 and "exists" in result.stdout):
+            try:
+                logger.debug(f"SSH command for remote check: {' '.join(cmd)}")
+            except Exception:
+                logger.debug("SSH command for remote check (could not join cmd list)")
+            logger.debug(f"Remote check stdout: {result.stdout!r}")
+            logger.debug(f"Remote check stderr: {result.stderr!r}")
+
         return result.returncode == 0 and "exists" in result.stdout
     except Exception as e:
         logger.error(f"Error checking remote path {remote_path}: {e}")
@@ -260,7 +402,7 @@ def check_remote_path_exists(username: str, hostname: str, keyfile: str, gateway
 
 
 def prompt_upload_data(local_path: str, remote_path: str, username: str, hostname: str, 
-                      keyfile: str, gateway: Optional[str]) -> bool:
+                      keyfile: str, gateway: Optional[str], participant_label: str = "") -> bool:
     """Prompt user to upload data to HPC and perform upload if confirmed.
     
     Parameters
@@ -277,13 +419,16 @@ def prompt_upload_data(local_path: str, remote_path: str, username: str, hostnam
         SSH keyfile
     gateway : Optional[str]
         ProxyJump gateway
+    participant_label : str
+        Participant label for logging context
         
     Returns
     -------
     bool
         True if upload successful or user declined, False if upload failed
     """
-    print(f"\n⚠️  Required data not found on HPC: {remote_path}")
+    participant_info = f"[sub-{participant_label}] " if participant_label else ""
+    print(f"\n⚠️  {participant_info}Required data not found on HPC: {remote_path}")
     print(f"   Local path: {local_path}")
     
     response = input("\nWould you like to upload the data to the HPC? [y/N]: ").strip().lower()
@@ -356,6 +501,8 @@ def check_required_data(tool: str, dataset: str, participant_label: str, args: A
     bool
         True if all required data present or uploaded, False otherwise
     """
+    logger.info(f"Checking required data for participant sub-{participant_label}...")
+    
     # Expand paths (will be done on cluster, but use for local checking)
     if not hpc_rawdata:
         hpc_rawdata_check = "$GLOBALSCRATCH/rawdata"
@@ -386,57 +533,59 @@ def check_required_data(tool: str, dataset: str, participant_label: str, args: A
     
     # Check rawdata
     rawdata_path = f"{hpc_rawdata_check}/{dataset}-rawdata"
-    logger.info(f"Checking for rawdata on HPC: {rawdata_path}")
-    
+    logger.info(f"  [sub-{participant_label}] Checking rawdata on HPC: {rawdata_path}")
     if not check_remote_path_exists(username, hostname, keyfile, gateway, rawdata_path):
+        logger.warning(f"[sub-{participant_label}] Required data not found on HPC: {rawdata_path}")
         local_rawdata = Path.home() / "rawdata" / f"{dataset}-rawdata"
         if local_rawdata.exists():
-            if not prompt_upload_data(str(local_rawdata), rawdata_path, username, hostname, keyfile, gateway):
+            if not prompt_upload_data(str(local_rawdata), rawdata_path, username, hostname, keyfile, gateway, participant_label):
                 return False
         else:
-            print(f"\n✗ Rawdata not found locally at {local_rawdata}")
+            print(f"\n✗ [sub-{participant_label}] Rawdata not found locally at {local_rawdata}")
             print(f"   Cannot proceed without rawdata on HPC")
             return False
     else:
-        logger.info(f"✓ Rawdata found on HPC: {rawdata_path}")
+        logger.info(f"  [sub-{participant_label}] ✓ Rawdata found on HPC")
     
     # Check for precomputed FreeSurfer if required
     if tool in ['fmriprep', 'meld_graph'] and getattr(args, 'use_precomputed_fs', False):
         fs_version = getattr(args, 'fs_version', '7.2.0')
         fs_path = f"{hpc_derivatives_check}/{dataset}-derivatives/freesurfer_{fs_version}"
         
-        logger.info(f"Checking for FreeSurfer outputs on HPC: {fs_path}")
+        logger.info(f"  [sub-{participant_label}] Checking FreeSurfer outputs on HPC: {fs_path}")
         
         if not check_remote_path_exists(username, hostname, keyfile, gateway, fs_path):
+            logger.warning(f"[sub-{participant_label}] Required FreeSurfer outputs not found on HPC: {fs_path}")
             local_fs = Path.home() / "derivatives" / f"{dataset}-derivatives" / f"freesurfer_{fs_version}"
             if local_fs.exists():
-                if not prompt_upload_data(str(local_fs), fs_path, username, hostname, keyfile, gateway):
+                if not prompt_upload_data(str(local_fs), fs_path, username, hostname, keyfile, gateway, participant_label):
                     return False
             else:
-                print(f"\n✗ FreeSurfer outputs not found locally at {local_fs}")
+                print(f"\n✗ [sub-{participant_label}] FreeSurfer outputs not found locally at {local_fs}")
                 print(f"   Cannot use --use-precomputed-fs without FreeSurfer outputs on HPC")
                 return False
         else:
-            logger.info(f"✓ FreeSurfer outputs found on HPC: {fs_path}")
+            logger.info(f"  [sub-{participant_label}] ✓ FreeSurfer outputs found on HPC")
     
     # Check for QSIPrep outputs if running QSIRecon
     if tool == 'qsirecon':
         qsiprep_version = getattr(args, 'qsiprep_version', '1.0.1')
         qsiprep_path = f"{hpc_derivatives_check}/{dataset}-derivatives/qsiprep_{qsiprep_version}"
         
-        logger.info(f"Checking for QSIPrep outputs on HPC: {qsiprep_path}")
+        logger.info(f"  [sub-{participant_label}] Checking QSIPrep outputs on HPC: {qsiprep_path}")
         
         if not check_remote_path_exists(username, hostname, keyfile, gateway, qsiprep_path):
+            logger.warning(f"[sub-{participant_label}] Required QSIPrep outputs not found on HPC: {qsiprep_path}")
             local_qsiprep = Path.home() / "derivatives" / f"{dataset}-derivatives" / f"qsiprep_{qsiprep_version}"
             if local_qsiprep.exists():
-                if not prompt_upload_data(str(local_qsiprep), qsiprep_path, username, hostname, keyfile, gateway):
+                if not prompt_upload_data(str(local_qsiprep), qsiprep_path, username, hostname, keyfile, gateway, participant_label):
                     return False
             else:
-                print(f"\n✗ QSIPrep outputs not found locally at {local_qsiprep}")
+                print(f"\n✗ [sub-{participant_label}] QSIPrep outputs not found locally at {local_qsiprep}")
                 print(f"   Cannot run QSIRecon without QSIPrep outputs on HPC")
                 return False
         else:
-            logger.info(f"✓ QSIPrep outputs found on HPC: {qsiprep_path}")
+            logger.info(f"  [sub-{participant_label}] ✓ QSIPrep outputs found on HPC")
     
     return True
 
@@ -530,7 +679,7 @@ PARTICIPANT="sub-{participant_label}"
     # Tool-specific command generation
     if tool == "freesurfer":
         version = getattr(args, 'version', '7.3.2')
-        fs_license = getattr(args, 'hpc_fs_license', '$HOME/licenses/license.txt')
+        fs_license = getattr(args, 'hpc_fs_license', None) or '$HOME/licenses/license.txt'
         apptainer_img = f"{hpc_apptainer_dir}/freesurfer.freesurfer.{version}.sif"
         output_dir = f"$HPC_DERIVATIVES/$DATASET-derivatives/freesurfer_{version}"
         
@@ -552,7 +701,7 @@ apptainer exec \\
     
     elif tool == "fmriprep":
         version = getattr(args, 'version', '25.1.4')
-        fs_license = getattr(args, 'hpc_fs_license', '$HOME/licenses/license.txt')
+        fs_license = getattr(args, 'hpc_fs_license', None) or '$HOME/licenses/license.txt'
         apptainer_img = f"{hpc_apptainer_dir}/nipreps.fmriprep.{version}.sif"
         output_dir = f"$HPC_DERIVATIVES/$DATASET-derivatives/fmriprep_{version}"
         
@@ -654,7 +803,7 @@ apptainer exec \\
     
     elif tool == "meld_graph":
         version = getattr(args, 'version', 'v2.2.3')
-        fs_license = getattr(args, 'hpc_fs_license', '$HOME/licenses/license.txt')
+        fs_license = getattr(args, 'hpc_fs_license', None) or '$HOME/licenses/license.txt'
         apptainer_img = f"{hpc_apptainer_dir}/meldproject.meld_graph.{version}.sif"
         
         # GPU settings
@@ -815,14 +964,29 @@ def submit_hpc_job(
         ]
         result = subprocess.run(ssh_cmd, capture_output=True, text=True, check=True)
         
-        # Parse job ID
+        # Parse job ID - check both stdout and stderr since output may vary
         output = result.stdout.strip()
-        if "Submitted batch job" in output:
-            job_id = output.split()[-1]
+        stderr = result.stderr.strip()
+        logger.debug(f"sbatch stdout: {output!r}")
+        logger.debug(f"sbatch stderr: {stderr!r}")
+        
+        # Look for job ID in stdout first, then stderr
+        # Format can be "Submitted batch job 224780" or "Submitted batch job 224780 on cluster lyra"
+        job_id = None
+        for text in [output, stderr]:
+            if "Submitted batch job" in text:
+                # Extract job ID - it's the number after "Submitted batch job"
+                match = re.search(r'Submitted batch job (\d+)', text)
+                if match:
+                    job_id = match.group(1)
+                    break
+        
+        if job_id:
             logger.info(f"✓ Job submitted successfully! Job ID: {job_id}")
             return job_id
         else:
-            logger.error(f"Unexpected sbatch output: {output}")
+            logger.error(f"Could not parse job ID from sbatch output. stdout: {output!r}, stderr: {stderr!r}")
+            return None
             return None
             
     except subprocess.CalledProcessError as e:
@@ -836,9 +1000,10 @@ def submit_multiple_jobs(
     tool: str,
     participant_labels: List[str],
     dataset: str,
-    args: Any
+    args: Any,
+    submission_delay: float = 0.5
 ) -> List[str]:
-    """Submit multiple jobs in parallel for different participants.
+    """Submit multiple jobs for different participants with staggered timing.
     
     Parameters
     ----------
@@ -850,6 +1015,9 @@ def submit_multiple_jobs(
         Dataset name
     args : Any
         Arguments namespace
+    submission_delay : float
+        Delay in seconds between job submissions to avoid resource conflicts
+        (default: 0.5 seconds)
         
     Returns
     -------
@@ -858,14 +1026,18 @@ def submit_multiple_jobs(
     """
     job_ids = []
     
-    logger.info(f"Submitting {len(participant_labels)} jobs in parallel...")
+    logger.info(f"Submitting {len(participant_labels)} jobs (with {submission_delay}s delay between submissions)...")
     
-    for participant_label in participant_labels:
+    for i, participant_label in enumerate(participant_labels):
         job_id = submit_hpc_job(tool, participant_label, dataset, args)
         if job_id:
             job_ids.append(job_id)
         else:
             logger.warning(f"Failed to submit job for participant {participant_label}")
+        
+        # Add delay between submissions to stagger job starts and avoid file locking issues
+        if i < len(participant_labels) - 1:  # No delay after last submission
+            time.sleep(submission_delay)
     
     return job_ids
 

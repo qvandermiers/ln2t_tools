@@ -332,6 +332,11 @@ by administrators in the rawdata directory.
         help="Path to physiological data configuration file (JSON format with DummyVolumes). "
              "If not specified, auto-detects from sourcedata/configs/physio.json or physio/config.json"
     )
+    parser_import.add_argument(
+        "--keep-tmp-files",
+        action="store_true",
+        help="Keep temporary files created by dcm2bids (tmp_dcm2bids directory in rawdata)"
+    )
 
     return parser.parse_args()
 

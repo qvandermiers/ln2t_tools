@@ -39,6 +39,8 @@ from ln2t_tools.utils.hpc import (
     print_download_command,
     check_apptainer_image_exists_on_hpc,
     get_hpc_image_build_command,
+    start_ssh_control_master,
+    test_ssh_connection,
 )
 from ln2t_tools.utils.defaults import (
     DEFAULT_RAWDATA,
@@ -276,7 +278,8 @@ def handle_import(args):
                 session=getattr(args, 'session', None),
                 compress_source=getattr(args, 'compress_source', False),
                 deface=getattr(args, 'deface', False),
-                venv_path=venv_path
+                venv_path=venv_path,
+                keep_tmp_files=getattr(args, 'keep_tmp_files', False)
             )
         
         elif datatype == 'mrs':
@@ -1606,6 +1609,12 @@ def main(args=None) -> None:
                                 dataset_success = False
                                 continue
 
+                            # Establish SSH ControlMaster for connection reuse (avoids rate limiting)
+                            if not test_ssh_connection(username, hostname, keyfile, gateway):
+                                logger.error("Cannot connect to HPC. Please check SSH configuration.")
+                                dataset_success = False
+                                continue
+
                             image_ok = check_apptainer_image_exists_on_hpc(
                                 username=username,
                                 hostname=hostname,
@@ -1695,7 +1704,8 @@ def main(args=None) -> None:
                                 print_download_command(
                                     tool=tool,
                                     dataset=dataset,
-                                    args=args
+                                    args=args,
+                                    job_ids=job_ids
                                 )
                                 
                                 successful_datasets.append(dataset)
