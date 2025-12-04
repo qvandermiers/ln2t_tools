@@ -46,6 +46,89 @@ def get_ssh_command(username: str, hostname: str, keyfile: str, gateway: Optiona
     return cmd
 
 
+def check_apptainer_image_exists_on_hpc(
+    username: str,
+    hostname: str,
+    keyfile: str,
+    gateway: Optional[str],
+    hpc_apptainer_dir: str,
+    tool: str,
+    version: str
+) -> bool:
+    """Check whether the Apptainer image for a tool/version exists on the remote HPC.
+
+    This performs a remote `test -e` via SSH. Returns True if the file exists.
+    """
+    # Map tool -> docker owner (should mirror ensure_image_exists() mapping)
+    if tool == "freesurfer":
+        tool_owner = "freesurfer"
+    elif tool == "fastsurfer":
+        tool_owner = "deepmi"
+    elif tool == "fmriprep":
+        tool_owner = "nipreps"
+    elif tool == "qsiprep":
+        tool_owner = "pennlinc"
+    elif tool == "qsirecon":
+        tool_owner = "pennlinc"
+    elif tool == "meld_graph":
+        tool_owner = "meldproject"
+    else:
+        logger.error(f"Unknown tool when checking HPC image: {tool}")
+        return False
+
+    # Image filename uses the version/token as provided (allow full tags like 'cuda-v2.4.2')
+    image_name = f"{tool_owner}.{tool}.{version}.sif"
+    remote_path = Path(hpc_apptainer_dir) / image_name
+
+    ssh_cmd = get_ssh_command(username, hostname, keyfile, gateway) + [f"test -e {remote_path}"]
+
+    try:
+        logger.info(f"Checking for Apptainer image on HPC: {username}@{hostname}:{remote_path}")
+        result = subprocess.run(ssh_cmd, capture_output=True)
+        return result.returncode == 0
+    except Exception as e:
+        logger.error(f"Error checking Apptainer image on HPC: {e}")
+        return False
+
+
+def get_hpc_image_build_command(
+    username: str,
+    hostname: str,
+    keyfile: str,
+    gateway: Optional[str],
+    hpc_apptainer_dir: str,
+    tool: str,
+    version: str
+) -> str:
+    """Generate the SSH command to build an Apptainer image on the HPC.
+    
+    Returns a ready-to-copy-paste command string.
+    """
+    # Map tool -> docker owner
+    tool_owners = {
+        "freesurfer": "freesurfer",
+        "fastsurfer": "deepmi",
+        "fmriprep": "nipreps",
+        "qsiprep": "pennlinc",
+        "qsirecon": "pennlinc",
+        "meld_graph": "meldproject",
+    }
+    tool_owner = tool_owners.get(tool, tool)
+    
+    image_name = f"{tool_owner}.{tool}.{version}.sif"
+    remote_path = f"{hpc_apptainer_dir}/{image_name}"
+    docker_uri = f"docker://{tool_owner}/{tool}:{version}"
+    
+    # Build the SSH command
+    ssh_opts = f"-i {keyfile}"
+    if gateway:
+        ssh_opts += f" -J {username}@{gateway}"
+    
+    build_cmd = f"apptainer build {remote_path} {docker_uri}"
+    
+    return f"ssh {ssh_opts} {username}@{hostname} '{build_cmd}'"
+
+
 def get_scp_command(username: str, hostname: str, keyfile: str, gateway: Optional[str] = None) -> list:
     """Get SCP command with proper key configuration and optional ProxyJump.
     
@@ -597,7 +680,7 @@ apptainer exec \\
             python_cmd = f"python scripts/new_patient_pipeline/new_pt_pipeline.py -id sub-{participant_label}"
             if getattr(args, 'harmo_code', None):
                 python_cmd += f" -harmo_code {args.harmo_code}"
-            if getattr(args, 'skip_segmentation', False):
+            if getattr(args, 'skip_feature_extraction', False):
                 python_cmd += " --skip_feature_extraction"
         
         script += f"""

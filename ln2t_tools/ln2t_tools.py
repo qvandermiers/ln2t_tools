@@ -36,13 +36,16 @@ from ln2t_tools.utils.hpc import (
     submit_multiple_jobs,
     validate_hpc_config,
     check_required_data,
-    print_download_command
+    print_download_command,
+    check_apptainer_image_exists_on_hpc,
+    get_hpc_image_build_command,
 )
 from ln2t_tools.utils.defaults import (
     DEFAULT_RAWDATA,
     DEFAULT_DERIVATIVES,
     DEFAULT_CODE,
     DEFAULT_FS_VERSION,
+    DEFAULT_FASTSURFER_VERSION,
     DEFAULT_FMRIPREP_VERSION,
     DEFAULT_QSIPREP_VERSION,
     DEFAULT_QSIRECON_VERSION,
@@ -387,6 +390,7 @@ def setup_directories(args) -> tuple[Path, Path, Path]:
     dataset_derivatives = dataset_derivatives.resolve()
     logger.debug(f"Resolved derivatives path: {dataset_derivatives}")
     version = (DEFAULT_FS_VERSION if args.tool == 'freesurfer' 
+              else DEFAULT_FASTSURFER_VERSION if args.tool == 'fastsurfer'
               else DEFAULT_FMRIPREP_VERSION if args.tool == 'fmriprep'
               else DEFAULT_QSIPREP_VERSION if args.tool == 'qsiprep'
               else DEFAULT_QSIRECON_VERSION if args.tool == 'qsirecon'
@@ -574,6 +578,110 @@ def build_bids_subdir(
     if run:
         parts.append(f"run-{run}")
     return "_".join(parts)
+
+
+def process_fastsurfer_subject(
+    layout: BIDSLayout,
+    participant_label: str,
+    args,
+    dataset_rawdata: Path,
+    dataset_derivatives: Path,
+    apptainer_img: str
+) -> None:
+    """Process a single subject with FastSurfer.
+    
+    FastSurfer is a deep learning-based neuroimaging pipeline for fast
+    whole-brain segmentation and cortical surface reconstruction.
+    """
+    t1w_files = layout.get(
+        subject=participant_label,
+        scope="raw",
+        suffix="T1w",
+        extension=".nii.gz",
+        return_type="filename"
+    )
+    
+    if not t1w_files:
+        logger.warning(f"No T1w images found for participant {participant_label}")
+        return
+
+    for t1w in t1w_files:
+        entities = layout.parse_file_entities(t1w)
+        output_subdir = build_bids_subdir(
+            participant_label, 
+            entities.get('session'), 
+            entities.get('run')
+        )
+        
+        output_label = args.output_label or f"fastsurfer_{args.version or DEFAULT_FASTSURFER_VERSION}"
+        output_participant_dir = dataset_derivatives / output_label / output_subdir
+
+        if output_participant_dir.exists():
+            logger.info(f"Output exists, skipping: {output_participant_dir}")
+            continue
+
+        # Verify input files exist before launching
+        logger.info("Verifying input files exist on host:")
+        t1w_path = Path(t1w)
+        logger.info(f"  T1w: {t1w_path}")
+        if t1w_path.exists():
+            logger.info(f"    ✓ File exists (size: {t1w_path.stat().st_size / (1024*1024):.2f} MB)")
+        else:
+            logger.error(f"    ✗ File NOT found!")
+            raise FileNotFoundError(f"T1w file not found: {t1w_path}")
+        
+        # Get optional T2 image for hypothalamus segmentation
+        t2w_files = layout.get(
+            subject=participant_label,
+            session=entities.get('session'),
+            scope="raw",
+            suffix="T2w",
+            extension=".nii.gz",
+            return_type="filename"
+        )
+        t2_path = t2w_files[0] if t2w_files else None
+        if t2_path:
+            logger.info(f"  T2w: {t2_path}")
+            if Path(t2_path).exists():
+                logger.info(f"    ✓ File exists")
+            else:
+                logger.warning(f"    ✗ File NOT found, continuing without T2")
+                t2_path = None
+
+        logger.info(f"Binding directories:")
+        logger.info(f"  Rawdata: {dataset_rawdata} -> /data (read-only)")
+        logger.info(f"  Derivatives: {dataset_derivatives} -> /output")
+        logger.info(f"  FreeSurfer license: {args.fs_license} -> /fs_license/license.txt")
+
+        # Build FastSurfer command options
+        options = {
+            'fs_license': args.fs_license,
+            'rawdata': str(dataset_rawdata),
+            'derivatives': str(dataset_derivatives),
+            'participant_label': participant_label,
+            't1w': t1w,
+            'apptainer_img': apptainer_img,
+            'output_label': output_label,
+            'session': entities.get('session'),
+            'run': entities.get('run'),
+            'seg_only': getattr(args, 'seg_only', False),
+            'surf_only': getattr(args, 'surf_only', False),
+            'three_tesla': getattr(args, 'three_tesla', False),
+            'threads': getattr(args, 'threads', 4),
+            'device': getattr(args, 'device', 'auto'),
+            'vox_size': getattr(args, 'vox_size', 'min'),
+            'no_cereb': getattr(args, 'no_cereb', False),
+            'no_hypothal': getattr(args, 'no_hypothal', False),
+            'no_biasfield': getattr(args, 'no_biasfield', False),
+        }
+        
+        if t2_path:
+            options['t2'] = t2_path
+
+        # Build and launch FastSurfer command
+        apptainer_cmd = build_apptainer_cmd(tool="fastsurfer", **options)
+        launch_and_check(apptainer_cmd, "FastSurfer", participant_label)
+
 
 def process_fmriprep_subject(
     layout: BIDSLayout,
@@ -879,7 +987,7 @@ def process_meldgraph_subject(
     
     # Check for FreeSurfer outputs if needed
     fs_derivatives_dir = None
-    use_skip_segmentation = getattr(args, 'skip_segmentation', False)
+    use_skip_feature_extraction = getattr(args, 'skip_feature_extraction', False)
     use_precomputed = getattr(args, 'use_precomputed_fs', False)
     
     # IMPORTANT: Only create input symlinks if NOT using precomputed FreeSurfer
@@ -937,7 +1045,7 @@ def process_meldgraph_subject(
             
             # Check if user explicitly wants to skip feature extraction
             # (only if features from a previous MELD run already exist)
-            if not use_skip_segmentation:
+            if not use_skip_feature_extraction:
                 logger.info("MELD will run feature extraction to create .sm3.mgh files")
             
             # Keep fs_derivatives_dir to bind into container
@@ -952,9 +1060,9 @@ def process_meldgraph_subject(
         fs_license=str(args.fs_license),
         fs_subjects_dir=str(fs_derivatives_dir) if fs_derivatives_dir else None,
         harmo_code=getattr(args, 'harmo_code', None),
-        demographics=getattr(args, 'demographics', None),
-        skip_segmentation=use_skip_segmentation,
-        harmonize_only=getattr(args, 'harmonize_only', False),
+        demographics=None,  # Always auto-generated from participants.tsv
+        skip_feature_extraction=use_skip_feature_extraction,
+        harmonize=getattr(args, 'harmonize', False),
         use_gpu=not getattr(args, 'no_gpu', False),  # Enable GPU unless --no-gpu is set
         gpu_memory_limit=getattr(args, 'gpu_memory_limit', 128),  # GPU memory split size
         additional_options=getattr(args, 'additional_options', '')
@@ -1012,51 +1120,39 @@ def process_meld_harmonization(
         meld_version
     )
     
-    # Handle demographics file
-    demographics_file = None
+    # Auto-generate demographics from participants.tsv
+    participants_tsv = dataset_rawdata / "participants.tsv"
     
-    # If user provided demographics file, use it
-    if getattr(args, 'demographics', None):
-        demographics_file = Path(args.demographics)
-        if not demographics_file.exists():
-            logger.error(f"Demographics file not found: {demographics_file}")
-            return
-        logger.info(f"Using provided demographics file: {demographics_file}")
-    else:
-        # Auto-generate from participants.tsv
-        participants_tsv = dataset_rawdata / "participants.tsv"
-        
-        if not participants_tsv.exists():
-            logger.error(
-                f"participants.tsv not found: {participants_tsv}\n"
-                f"Either provide a demographics CSV file with --demographics, "
-                f"or ensure your BIDS dataset has a participants.tsv file."
-            )
-            return
-        
-        logger.info("No demographics file provided. Creating from participants.tsv...")
-        
-        # Create demographics file in MELD data directory
-        auto_demographics_file = meld_data_dir / f"demographics_{args.harmo_code}.csv"
-        demographics_file = create_meld_demographics_from_participants(
-            participants_tsv=participants_tsv,
-            participant_labels=participant_labels,
-            harmo_code=args.harmo_code,
-            output_path=auto_demographics_file
+    if not participants_tsv.exists():
+        logger.error(
+            f"participants.tsv not found: {participants_tsv}\n"
+            f"Please ensure your BIDS dataset has a participants.tsv file."
         )
-        
-        if demographics_file is None:
-            logger.error("Failed to create demographics file from participants.tsv")
-            logger.error(
-                "Please ensure participants.tsv contains required columns:\n"
-                "  - participant_id (required)\n"
-                "  - age or Age (required, numeric)\n"
-                "  - sex or Sex or gender (required, M/F or male/female)\n"
-                "  - group (optional, defaults to 'patient' if missing)"
-            )
-            return
-        
-        logger.info(f"Successfully created demographics file: {demographics_file}")
+        return
+    
+    logger.info("Creating demographics file from participants.tsv...")
+    
+    # Create demographics file in MELD data directory
+    auto_demographics_file = meld_data_dir / f"demographics_{args.harmo_code}.csv"
+    demographics_file = create_meld_demographics_from_participants(
+        participants_tsv=participants_tsv,
+        participant_labels=participant_labels,
+        harmo_code=args.harmo_code,
+        output_path=auto_demographics_file
+    )
+    
+    if demographics_file is None:
+        logger.error("Failed to create demographics file from participants.tsv")
+        logger.error(
+            "Please ensure participants.tsv contains required columns:\n"
+            "  - participant_id (required)\n"
+            "  - age or Age (required, numeric)\n"
+            "  - sex or Sex or gender (required, M/F or male/female)\n"
+            "  - group (optional, defaults to 'patient' if missing)"
+        )
+        return
+    
+    logger.info(f"Successfully created demographics file: {demographics_file}")
     
     # Validate demographics file
     if not validate_meld_demographics(demographics_file):
@@ -1090,7 +1186,7 @@ def process_meld_harmonization(
     
     # Handle precomputed FreeSurfer outputs
     fs_subjects_dir = None
-    skip_segmentation = getattr(args, 'skip_segmentation', False)
+    skip_feature_extraction = getattr(args, 'skip_feature_extraction', False)
     
     if getattr(args, 'use_precomputed_fs', False):
         fs_version = getattr(args, 'fs_version', DEFAULT_MELD_FS_VERSION)
@@ -1187,8 +1283,8 @@ def process_meld_harmonization(
         fs_subjects_dir=fs_subjects_dir if 'fs_subjects_dir' in locals() else None,
         harmo_code=args.harmo_code,
         demographics=str(demographics_file.name),
-        harmonize_only=True,
-        skip_segmentation=skip_segmentation,  # Only True if user explicitly set it
+        harmonize=True,
+        skip_feature_extraction=skip_feature_extraction,  # Only True if user explicitly set it
         use_gpu=not getattr(args, 'no_gpu', False),  # Enable GPU unless --no-gpu is set
         gpu_memory_limit=getattr(args, 'gpu_memory_limit', 128),  # GPU memory split size
         additional_options=getattr(args, 'additional_options', '')
@@ -1300,6 +1396,7 @@ def main(args=None) -> None:
                 # Fallback to command line tool if no config
                 if hasattr(args, 'tool') and args.tool:
                     default_version = DEFAULT_FS_VERSION if args.tool == 'freesurfer' else \
+                                    DEFAULT_FASTSURFER_VERSION if args.tool == 'fastsurfer' else \
                                     DEFAULT_FMRIPREP_VERSION if args.tool == 'fmriprep' else \
                                     DEFAULT_QSIPREP_VERSION if args.tool == 'qsiprep' else \
                                     DEFAULT_QSIRECON_VERSION if args.tool == 'qsirecon' else \
@@ -1348,30 +1445,19 @@ def main(args=None) -> None:
                             failed_datasets.append(dataset)
                             continue
                     
-                    # Harmonization workflow (explicit --harmonize or legacy --harmonize-only)
-                    if getattr(args, 'harmonize', False) or getattr(args, 'harmonize_only', False):
-                        # Resolve participant list (from file or labels)
-                        participant_list: List[str] = []
-                        if getattr(args, 'participants_file', None):
-                            pf = Path(args.participants_file)
-                            if not pf.exists():
-                                logger.error(f"Participants file not found: {pf}")
-                                failed_datasets.append(dataset)
-                                continue
-                            with open(pf) as f:
-                                for line in f:
-                                    s = line.strip()
-                                    if not s:
-                                        continue
-                                    s = s.replace('sub-','')
-                                    participant_list.append(s)
-                        else:
-                            participant_list = args.participant_label if args.participant_label else []
+                    # Harmonization workflow
+                    if getattr(args, 'harmonize', False):
+                        # Get participant list from --participant-label arguments
+                        participant_list = args.participant_label if args.participant_label else []
                         
                         layout = BIDSLayout(dataset_rawdata)
                         participant_list = check_participants_exist(layout, participant_list)
                         if not participant_list:
-                            logger.error("No valid participants provided for harmonization")
+                            logger.error(
+                                "No valid participants provided for harmonization. "
+                                "Use --participant-label to specify participants, e.g.: "
+                                "--participant-label 01 02 03"
+                            )
                             failed_datasets.append(dataset)
                             continue
                         
@@ -1407,33 +1493,22 @@ def main(args=None) -> None:
                                 f.write(f"sub-{pid}\n")
                         logger.info(f"Subjects list written: {subjects_list_path}")
                         
-                        # Demographics CSV
-                        if getattr(args, 'demographics', None):
-                            demographics_path = Path(args.demographics)
-                            if not demographics_path.exists():
-                                logger.error(f"Demographics file not found: {demographics_path}")
-                                failed_datasets.append(dataset)
-                                continue
-                            dest_demo = meld_data_dir / demographics_path.name
-                            if demographics_path != dest_demo:
-                                shutil.copy(demographics_path, dest_demo)
-                            demographics_path = dest_demo
-                        else:
-                            participants_tsv = dataset_rawdata / "participants.tsv"
-                            if not participants_tsv.exists():
-                                logger.error(f"participants.tsv not found: {participants_tsv}")
-                                failed_datasets.append(dataset)
-                                continue
-                            demographics_path = create_meld_demographics_from_participants(
-                                participants_tsv=participants_tsv,
-                                participant_labels=participant_list,
-                                harmo_code=args.harmo_code,
-                                output_path=meld_data_dir / f"demographics_{args.harmo_code}.csv"
-                            )
-                            if demographics_path is None:
-                                logger.error("Failed to create demographics CSV for harmonization")
-                                failed_datasets.append(dataset)
-                                continue
+                        # Demographics CSV - always auto-generate from participants.tsv
+                        participants_tsv = dataset_rawdata / "participants.tsv"
+                        if not participants_tsv.exists():
+                            logger.error(f"participants.tsv not found: {participants_tsv}")
+                            failed_datasets.append(dataset)
+                            continue
+                        demographics_path = create_meld_demographics_from_participants(
+                            participants_tsv=participants_tsv,
+                            participant_labels=participant_list,
+                            harmo_code=args.harmo_code,
+                            output_path=meld_data_dir / f"demographics_{args.harmo_code}.csv"
+                        )
+                        if demographics_path is None:
+                            logger.error("Failed to create demographics CSV for harmonization")
+                            failed_datasets.append(dataset)
+                            continue
                         
                         # Persist harmonization metadata
                         harmo_dir = dataset_derivatives / f"meld_graph_{args.version or DEFAULT_MELDGRAPH_VERSION}" / "harmonization"
@@ -1502,7 +1577,7 @@ def main(args=None) -> None:
 
                 # Process each tool for this dataset
                 for tool, version in tools_to_run.items():
-                    if tool not in ["freesurfer", "fmriprep", "qsiprep", "qsirecon", "meld_graph"]:
+                    if tool not in ["freesurfer", "fastsurfer", "fmriprep", "qsiprep", "qsirecon", "meld_graph"]:
                         logger.warning(f"Unsupported tool {tool} for dataset {dataset}, skipping")
                         continue
                     
@@ -1515,8 +1590,54 @@ def main(args=None) -> None:
                     try:
                         # Check tool requirements
                         check_apptainer_is_installed("/usr/bin/apptainer")
-                        apptainer_img = ensure_image_exists(args.apptainer_dir, tool, version)
                         check_file_exists(args.fs_license)
+
+                        # If submitting to HPC, do not build a local image; instead
+                        # ensure the required image exists on the HPC apptainer directory.
+                        if getattr(args, 'hpc', False):
+                            username = args.hpc_username
+                            hostname = args.hpc_hostname
+                            keyfile = args.hpc_keyfile
+                            gateway = getattr(args, 'hpc_gateway', None)
+                            hpc_apptainer_dir = getattr(args, 'hpc_apptainer_dir', None)
+
+                            if not hpc_apptainer_dir:
+                                logger.error("HPC apptainer directory not configured (hpc-apptainer-dir)")
+                                dataset_success = False
+                                continue
+
+                            image_ok = check_apptainer_image_exists_on_hpc(
+                                username=username,
+                                hostname=hostname,
+                                keyfile=keyfile,
+                                gateway=gateway,
+                                hpc_apptainer_dir=hpc_apptainer_dir,
+                                tool=tool,
+                                version=version
+                            )
+
+                            if not image_ok:
+                                build_cmd = get_hpc_image_build_command(
+                                    username=username,
+                                    hostname=hostname,
+                                    keyfile=keyfile,
+                                    gateway=gateway,
+                                    hpc_apptainer_dir=hpc_apptainer_dir,
+                                    tool=tool,
+                                    version=version
+                                )
+                                logger.error(
+                                    f"Apptainer image for {tool} ({version}) not found on HPC at {hpc_apptainer_dir}.\n"
+                                    f"To build the image on the HPC, run:\n\n    {build_cmd}\n"
+                                )
+                                dataset_success = False
+                                continue
+
+                            # For HPC submission, there is no local image to reference
+                            apptainer_img = None
+                        else:
+                            # Local execution: ensure local Apptainer image exists (build if needed)
+                            apptainer_img = ensure_image_exists(args.apptainer_dir, tool, version)
 
                         # Check if HPC submission is requested
                         if getattr(args, 'hpc', False):
@@ -1525,15 +1646,34 @@ def main(args=None) -> None:
                             # Validate HPC configuration
                             validate_hpc_config(args)
                             
-                            # Check required data on HPC and prompt for upload if needed
-                            data_ready = check_required_data(
-                                tool=tool,
-                                dataset=dataset,
-                                participant_labels=participant_list,
-                                args=args
-                            )
+                            # Get HPC connection parameters
+                            username = args.hpc_username
+                            hostname = args.hpc_hostname
+                            keyfile = args.hpc_keyfile
+                            gateway = getattr(args, 'hpc_gateway', None)
+                            hpc_rawdata = getattr(args, 'hpc_rawdata', '$GLOBALSCRATCH/rawdata')
+                            hpc_derivatives = getattr(args, 'hpc_derivatives', '$GLOBALSCRATCH/derivatives')
                             
-                            if not data_ready:
+                            # Check required data on HPC for each participant
+                            all_data_ready = True
+                            for participant_label in participant_list:
+                                data_ready = check_required_data(
+                                    tool=tool,
+                                    dataset=dataset,
+                                    participant_label=participant_label,
+                                    args=args,
+                                    username=username,
+                                    hostname=hostname,
+                                    keyfile=keyfile,
+                                    gateway=gateway,
+                                    hpc_rawdata=hpc_rawdata,
+                                    hpc_derivatives=hpc_derivatives
+                                )
+                                if not data_ready:
+                                    all_data_ready = False
+                                    break
+                            
+                            if not all_data_ready:
                                 logger.error("Required data not available on HPC. Skipping this tool.")
                                 dataset_success = False
                                 continue
@@ -1573,6 +1713,15 @@ def main(args=None) -> None:
                             try:
                                 if tool == "freesurfer":
                                     process_freesurfer_subject(
+                                        layout=layout,
+                                        participant_label=participant_label,
+                                        args=args,
+                                        dataset_rawdata=dataset_rawdata,
+                                        dataset_derivatives=dataset_derivatives,
+                                        apptainer_img=apptainer_img
+                                    )
+                                elif tool == "fastsurfer":
+                                    process_fastsurfer_subject(
                                         layout=layout,
                                         participant_label=participant_label,
                                         args=args,

@@ -477,20 +477,16 @@ sub-003	32	M	patient
 ```bash
 ln2t_tools meld_graph --dataset mydataset \
   --participant-label 01 02 03 ... 20 \
-  --harmonize-only \
+  --harmonize \
   --harmo-code H1
 ```
 
-Alternatively, you can provide your own demographics CSV file:
-```bash
-ln2t_tools meld_graph --dataset mydataset \
-  --participant-label 01 02 03 ... 20 \
-  --harmonize-only \
-  --harmo-code H1 \
-  --demographics /path/to/demographics_H1.csv
+The demographics CSV is automatically generated from `participants.tsv`. If you need to inspect or customize it, it will be created at:
+```
+~/derivatives/{dataset}-derivatives/meld_graph_v2.2.3/demographics_H1.csv
 ```
 
-The demographics CSV format (if providing your own):
+The demographics CSV format:
 ```csv
 ID,Harmo code,Group,Age at preoperative,Sex
 sub-001,H1,patient,25,male
@@ -550,12 +546,12 @@ If MELD features (`.sm3.mgh` files) are already extracted from a previous MELD r
 ```bash
 ln2t_tools meld_graph --dataset mydataset \
   --participant-label 01 \
-  --skip-segmentation
+  --skip-feature-extraction
 ```
 
-> **Important**: `--skip-segmentation` tells MELD to skip feature extraction, not FreeSurfer recon-all. Use this only when `.on_lh.thickness.sm3.mgh` and similar files already exist from a previous MELD run.
+> **Important**: `--skip-feature-extraction` tells MELD to skip computing surface features (`.sm3.mgh` files). Use this only when those files already exist from a previous MELD run.
 
-> **Note**: When using `--use-precomputed-fs`, MELD automatically detects existing FreeSurfer outputs and skips recon-all, but still runs feature extraction to create `.sm3.mgh` files. Don't use `--skip-segmentation` unless those feature files already exist.
+> **Note**: When using `--use-precomputed-fs`, MELD automatically detects existing FreeSurfer outputs and skips recon-all, but still runs feature extraction to create `.sm3.mgh` files. Don't use `--skip-feature-extraction` unless those feature files already exist.
 
 ---
 
@@ -571,7 +567,7 @@ ln2t_tools meld_graph --dataset epilepsy_study \
   --participant-label 01 02 03 04 05 06 07 08 09 10 \
                         11 12 13 14 15 16 17 18 19 20 \
                         21 22 23 24 25 \
-  --harmonize-only \
+  --harmonize \
   --harmo-code H1
 
 # 3. Run prediction on new patient with harmonization
@@ -667,14 +663,13 @@ Participant Selection:
 
 MELD Workflow:
   --download-weights               Download model weights (run once)
-  --harmonize-only                 Compute harmonization parameters only
+  --harmonize                      Compute harmonization parameters only
   --harmo-code CODE                Harmonization code (e.g., H1, H2)
-  --demographics FILE              Demographics CSV (optional - auto-generated from participants.tsv)
 
 FreeSurfer:
   --fs-version VERSION             FreeSurfer version (default: 7.2.0, max: 7.2.0)
   --use-precomputed-fs             Use existing FreeSurfer outputs (skips recon-all, runs feature extraction)
-  --skip-segmentation              Skip MELD feature extraction (only if .sm3.mgh files already exist)
+  --skip-feature-extraction        Skip MELD feature extraction (only if .sm3.mgh files already exist)
 
 SLURM Options:
   --slurm                          Submit to SLURM cluster
@@ -1180,7 +1175,11 @@ ln2t_tools uses a modular plugin architecture that allows you to add new neuroim
 1. Create a directory: `ln2t_tools/tools/mytool/`
 2. Create `__init__.py` and `tool.py`
 3. Implement the `BaseTool` interface
-4. Your tool is automatically discovered and available!
+4. Add default version to `utils/defaults.py`
+5. Register the tool in `utils/utils.py` (image lookup and command builder)
+6. Add the tool to the supported tools list in `ln2t_tools.py`
+7. Update bash completion (optional but recommended)
+8. Your tool is automatically discovered and available!
 
 ### Step-by-Step Guide
 
@@ -1218,6 +1217,7 @@ from typing import List, Optional
 from bids import BIDSLayout
 
 from ln2t_tools.tools.base import BaseTool
+from ln2t_tools.utils.defaults import DEFAULT_MYTOOL_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -1232,7 +1232,7 @@ class MyTool(BaseTool):
     name = "mytool"                                    # CLI subcommand name
     help_text = "Brief help shown in ln2t_tools -h"   # Short description
     description = "Detailed tool description"          # Long description
-    default_version = "1.0.0"                          # Default container version
+    default_version = DEFAULT_MYTOOL_VERSION           # Default container version
     requires_gpu = False                               # Set True if GPU-accelerated
     
     @classmethod
@@ -1356,7 +1356,141 @@ class MyTool(BaseTool):
         return cmd
 ```
 
-#### 4. Test Your Tool
+#### 4. Add Default Version Constant
+
+Add a default version constant for your tool in `ln2t_tools/utils/defaults.py`. **Important**: Use the exact Docker tag for reproducibility (e.g., `"v1.0.0"` or `"cuda-v2.4.2"`, not just `"1.0.0"`):
+
+```python
+# ln2t_tools/utils/defaults.py
+
+# Add with the other default version constants
+# Use the EXACT Docker tag for reproducibility
+DEFAULT_MYTOOL_VERSION = "v1.0.0"  # Must match Docker Hub tag exactly
+```
+
+Then import and use it in your tool:
+
+```python
+# ln2t_tools/tools/mytool/tool.py
+from ln2t_tools.utils.defaults import DEFAULT_MYTOOL_VERSION
+
+class MyTool(BaseTool):
+    default_version = DEFAULT_MYTOOL_VERSION
+```
+
+#### 5. Register Tool in Utils (Critical Step!)
+
+This step is essential for the tool to work. You must register your tool in two functions in `ln2t_tools/utils/utils.py`:
+
+##### 5.1 Add to `ensure_image_exists()`
+
+This function maps tool names to Docker image owners and handles container building:
+
+```python
+# ln2t_tools/utils/utils.py - in ensure_image_exists() function
+
+def ensure_image_exists(tool, version, images_dir, logger):
+    """Ensure Apptainer image exists, build from Docker Hub if needed."""
+    
+    # ... existing code ...
+    
+    # Add your tool to the tool owner mapping
+    if tool == "freesurfer":
+        tool_owner = "freesurfer"
+    elif tool == "fmriprep":
+        tool_owner = "nipreps"
+    elif tool == "mytool":           # <-- ADD THIS
+        tool_owner = "myorg"         # Docker Hub organization/user
+    else:
+        raise ValueError(f"Unknown tool: {tool}")
+    
+    # The version is used directly as the Docker tag
+    # Make sure DEFAULT_MYTOOL_VERSION in defaults.py matches the exact Docker tag
+```
+
+##### 5.2 Add to `build_apptainer_cmd()`
+
+This function builds the actual Apptainer execution command with all bindings:
+
+```python
+# ln2t_tools/utils/utils.py - in build_apptainer_cmd() function
+
+def build_apptainer_cmd(tool, participant_label, args, ...):
+    # ... existing code ...
+    
+    elif tool == "mytool":
+        cmd = [
+            "apptainer", "run", "--cleanenv",
+            "-B", f"{dataset_rawdata}:/input:ro",
+            "-B", f"{dataset_derivatives}:/output",
+            apptainer_img,
+            "/input", "/output",
+            "--participant-label", participant_label,
+        ]
+        # Add tool-specific options
+        if getattr(args, 'my_flag', False):
+            cmd.append("--my-flag")
+```
+
+**Note**: Without this registration step, running your tool will fail with "Unsupported tool mytool" error!
+
+##### 5.3 Add to Supported Tools List in `ln2t_tools.py`
+
+The main processing loop has a hardcoded list of supported tools. Add your tool to this list:
+
+```python
+# ln2t_tools/ln2t_tools.py - in the main processing loop
+
+# Find this line and add your tool:
+if tool not in ["freesurfer", "fastsurfer", "fmriprep", "qsiprep", "qsirecon", "meld_graph", "mytool"]:
+    logger.warning(f"Unsupported tool {tool} for dataset {dataset}, skipping")
+    continue
+```
+
+#### 6. Update Bash Completion (Optional but Recommended)
+
+Add your tool to `ln2t_tools/completion/ln2t_tools_completion.bash`:
+
+```bash
+# Add tool name to the tools list
+tools="freesurfer fmriprep qsiprep qsirecon fastsurfer meld_graph mytool"
+
+# Add tool-specific completions
+_ln2t_tools_mytool() {
+    case "${prev}" in
+        --my-option)
+            COMPREPLY=( $(compgen -W "value1 value2 value3" -- "${cur}") )
+            return 0
+            ;;
+    esac
+    
+    COMPREPLY=( $(compgen -W "--my-option --my-flag --help" -- "${cur}") )
+}
+```
+
+#### 7. Create Apptainer Recipe (Optional)
+
+For tools without pre-built containers, create a recipe in `apptainer_recipes/`:
+
+```bash
+# apptainer_recipes/mytool.def
+Bootstrap: docker
+From: myorg/mytool:1.0.0
+
+%labels
+    Author Your Name
+    Version 1.0.0
+    Description My custom tool container
+
+%post
+    # Any additional setup commands
+    apt-get update && apt-get install -y curl
+
+%runscript
+    exec /opt/mytool/run.sh "$@"
+```
+
+#### 8. Test Your Tool
 
 ```bash
 # Verify tool is discovered

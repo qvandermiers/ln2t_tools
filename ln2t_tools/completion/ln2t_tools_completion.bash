@@ -5,7 +5,7 @@ _ln2t_tools_completion() {
     _init_completion || return
 
     # List of tools
-    local tools="freesurfer fmriprep qsiprep qsirecon meld_graph import"
+    local tools="freesurfer fastsurfer fmriprep qsiprep qsirecon meld_graph import"
     
     # Function to get dataset name from command line
     _get_dataset_name() {
@@ -51,7 +51,7 @@ _ln2t_tools_completion() {
 
     # Handle options
     case $prev in
-        freesurfer|fmriprep|qsiprep|qsirecon|meld_graph|import)
+        freesurfer|fastsurfer|fmriprep|qsiprep|qsirecon|meld_graph|import)
             COMPREPLY=( $(compgen -W "--dataset" -- "$cur") )
             return 0
             ;;
@@ -62,7 +62,7 @@ _ln2t_tools_completion() {
                 local datasets=$(find -L ~/sourcedata -maxdepth 1 -name "*-sourcedata" -type d -printf "%f\n" 2>/dev/null | sed 's/-sourcedata$//')
             else
                 # For all other tools, look in rawdata directory
-                local datasets=$(find -L ~/rawdata -maxdepth 1 -name "*-rawdata" -type d -printf "%f\n")
+                local datasets=$(find -L ~/rawdata -maxdepth 1 -name "*-rawdata" -type d -printf "%f\n" 2>/dev/null | sed 's/-rawdata$//')
             fi
             COMPREPLY=( $(compgen -W "${datasets}" -- "$cur") )
             return 0
@@ -87,6 +87,11 @@ _ln2t_tools_completion() {
             COMPREPLY=( $(compgen -W "dwidenoise patch2self none" -- "$cur") )
             return 0
             ;;
+        --device)
+            # Completion for FastSurfer device selection
+            COMPREPLY=( $(compgen -W "auto cpu cuda mps" -- "$cur") )
+            return 0
+            ;;
         *)
             # Other options based on context
             local opts="--participant-label --output-label --fs-license --apptainer-dir --version --list-datasets --list-missing --list-instances --max-instances"
@@ -94,6 +99,16 @@ _ln2t_tools_completion() {
             # Add fMRIPrep specific options
             if [[ ${words[1]} == "fmriprep" ]]; then
                 opts+=" --fs-no-reconall --output-spaces --nprocs --omp-nthreads"
+            fi
+            
+            # Add FreeSurfer specific options
+            if [[ ${words[1]} == "freesurfer" ]]; then
+                opts+=" --skip-surface-recon"
+            fi
+            
+            # Add FastSurfer specific options
+            if [[ ${words[1]} == "fastsurfer" ]]; then
+                opts+=" --seg-only --surf-only --3T --threads --device --vox-size --no-cereb --no-hypothal --no-biasfield --t2"
             fi
             
             # Add QSIPrep specific options

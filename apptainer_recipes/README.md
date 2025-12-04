@@ -2,6 +2,81 @@
 
 This directory contains Apptainer/Singularity recipe files for building containers used by ln2t_tools.
 
+## fastsurfer.def
+
+Recipe for building the FastSurfer container for deep-learning based brain segmentation and surface reconstruction.
+
+### Manual Build
+
+```bash
+cd /opt/apptainer
+apptainer build fastsurfer_2.4.2.sif /path/to/ln2t_tools/apptainer_recipes/fastsurfer.def
+```
+
+### Container Details
+
+- **Base image**: deepmi/fastsurfer:cuda-v2.4.2
+- **FastSurfer version**: 2.4.2
+- **GPU support**: CUDA (NVIDIA)
+- **Requirements**: FreeSurfer license, 8GB+ RAM, 8GB+ GPU memory recommended
+
+### Usage
+
+```bash
+# Full pipeline (segmentation + surface reconstruction)
+apptainer exec --nv \
+  -B /path/to/license.txt:/fs_license/license.txt:ro \
+  -B /path/to/rawdata:/data:ro \
+  -B /path/to/derivatives:/output \
+  /opt/apptainer/fastsurfer_2.4.2.sif \
+  /fastsurfer/run_fastsurfer.sh \
+    --sid sub-001 \
+    --sd /output/fastsurfer_2.4.2 \
+    --t1 /data/sub-001/anat/sub-001_T1w.nii.gz \
+    --fs_license /fs_license/license.txt
+
+# Segmentation only (~5 min on GPU)
+apptainer exec --nv \
+  -B /path/to/license.txt:/fs_license/license.txt:ro \
+  -B /path/to/rawdata:/data:ro \
+  -B /path/to/derivatives:/output \
+  /opt/apptainer/fastsurfer_2.4.2.sif \
+  /fastsurfer/run_fastsurfer.sh \
+    --sid sub-001 \
+    --sd /output/fastsurfer_2.4.2 \
+    --t1 /data/sub-001/anat/sub-001_T1w.nii.gz \
+    --fs_license /fs_license/license.txt \
+    --seg_only
+
+# CPU-only processing (remove --nv, add --device cpu)
+apptainer exec \
+  -B /path/to/license.txt:/fs_license/license.txt:ro \
+  -B /path/to/rawdata:/data:ro \
+  -B /path/to/derivatives:/output \
+  /opt/apptainer/fastsurfer_2.4.2.sif \
+  /fastsurfer/run_fastsurfer.sh \
+    --sid sub-001 \
+    --sd /output/fastsurfer_2.4.2 \
+    --t1 /data/sub-001/anat/sub-001_T1w.nii.gz \
+    --fs_license /fs_license/license.txt \
+    --device cpu
+```
+
+### Via ln2t_tools
+
+```bash
+# Full pipeline
+ln2t_tools fastsurfer --dataset mydataset --participant-label 001
+
+# Segmentation only
+ln2t_tools fastsurfer --dataset mydataset --participant-label 001 --seg-only
+
+# With 3T atlas
+ln2t_tools fastsurfer --dataset mydataset --participant-label 001 --3T
+```
+
+---
+
 ## phys2bids.def
 
 Recipe for building the phys2bids container for physiological data conversion to BIDS format.

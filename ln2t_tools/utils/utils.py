@@ -11,6 +11,7 @@ import getpass
 from pathlib import Path
 from typing import List, Optional, Dict
 from warnings import warn
+import subprocess
 
 from bids import BIDSLayout
 
@@ -228,6 +229,8 @@ def ensure_image_exists(
     """
     if tool == "freesurfer":
         tool_owner = "freesurfer"
+    elif tool == "fastsurfer":
+        tool_owner = "deepmi"
     elif tool == "fmriprep":
         tool_owner = "nipreps"
     elif tool == "qsiprep":
@@ -238,20 +241,36 @@ def ensure_image_exists(
         tool_owner = "meldproject"
     else:
         raise ValueError(f"Unsupported tool: {tool}")
-    image_path = apptainer_dir / f"{tool_owner}.{tool}.{version}.sif"
+    
+    # Determine the Docker tag to use. For reproducibility callers should
+    # provide full Docker tags (for example, "cuda-v2.4.2"). Keep a
+    # compatibility shim so plain numeric versions like "2.4.2" still work
+    # for FastSurfer by prefixing with "cuda-v" when appropriate.
+    if tool == "fastsurfer":
+        docker_tag = version if version and version.startswith("cuda-v") else f"cuda-v{version}"
+    else:
+        docker_tag = version
+
+    # Use the docker tag in the image filename for reproducibility
+    image_path = apptainer_dir / f"{tool_owner}.{tool}.{docker_tag}.sif"
     if not image_path.exists():
         logger.warning(
             f"Apptainer image not found: {image_path}\n"
-            f"Attempting to build the {tool} version {version} image..."
+            f"Attempting to build the {tool} image with Docker tag {docker_tag}..."
         )
-        build_cmd = (
-            f"apptainer build {image_path} docker://{tool_owner}/{tool}:{version}"
-        )
-        result = os.system(build_cmd)
-        if result != 0 or not image_path.exists():
+        build_cmd = f"apptainer build {image_path} docker://{tool_owner}/{tool}:{docker_tag}"
+        # Use subprocess so we get robust return codes and signals
+        try:
+            completed = subprocess.run(build_cmd, shell=True)
+            if completed.returncode != 0 or not image_path.exists():
+                raise FileNotFoundError(
+                    f"Failed to build Apptainer image: {image_path}\n"
+                    f"Please check Apptainer installation and Docker image availability."
+                )
+        except KeyboardInterrupt:
+            logger.error("Apptainer build interrupted by user (KeyboardInterrupt)")
             raise FileNotFoundError(
-                f"Failed to build Apptainer image: {image_path}\n"
-                f"Please check Apptainer installation and Docker image availability."
+                f"Interrupted while building Apptainer image: {image_path}"
             )
     return image_path
 
@@ -405,11 +424,17 @@ def build_apptainer_cmd(tool: str, **options) -> str:
         except ValueError:
             # If t1w is not under rawdata, use absolute path (fallback)
             t1w_container = str(t1w_host)
+        
+        # Determine recon-all directive: -autorecon1 (volumetric only) or -all (full pipeline)
+        if options.get('skip_surface_recon', False):
+            recon_directive = "-autorecon1"
+        else:
+            recon_directive = "-all"
             
         return (
             f"apptainer run -B {options['fs_license']}:/usr/local/freesurfer/.license "
             f"-B {options['rawdata']}:/rawdata:ro -B {options['derivatives']}:/derivatives "
-            f"{options['apptainer_img']} recon-all -all -subjid {subject_id} "
+            f"{options['apptainer_img']} recon-all {recon_directive} -subjid {subject_id} "
             f"-i {t1w_container} "
             f"-sd /derivatives/{options['output_label']} "
             f"{options.get('additional_options', '')}"
@@ -491,8 +516,8 @@ def build_apptainer_cmd(tool: str, **options) -> str:
         participant_label = options['participant_label']
         harmo_code = options.get('harmo_code', '')
         demographics = options.get('demographics', '')
-        skip_segmentation = options.get('skip_segmentation', False)
-        harmonize_only = options.get('harmonize_only', False)
+        skip_feature_extraction = options.get('skip_feature_extraction', False)
+        harmonize = options.get('harmonize', False)
         use_gpu = options.get('use_gpu', True)  # GPU usage control
         gpu_memory_limit = options.get('gpu_memory_limit', 128)  # GPU memory split size in MB
         
@@ -558,15 +583,15 @@ def build_apptainer_cmd(tool: str, **options) -> str:
         # - MELD will skip running recon-all (segmentation) automatically
         # - MELD still needs to run feature extraction to create .sm3.mgh files
         # - Only add --skip_feature_extraction if those features already exist
-        #   from a previous MELD run (user explicitly requested --skip-segmentation
-        #   for re-running without harmonization)
-        if skip_segmentation and not harmonize_only:
+        #   from a previous MELD run (user explicitly requested --skip-feature-extraction
+        #   for re-running without re-computing features)
+        if skip_feature_extraction and not harmonize:
             # Only skip feature extraction for non-harmonization runs
             # where features were already created
             python_args.append("--skip_feature_extraction")
         # For harmonization: never skip feature extraction (always need fresh features)
         
-        if harmonize_only:
+        if harmonize:
             python_args.append("--harmo_only")
         
         # Add any additional options
@@ -576,6 +601,96 @@ def build_apptainer_cmd(tool: str, **options) -> str:
         
         full_cmd = f"{python_cmd} {' '.join(python_args)}'"
         cmd_parts.append(full_cmd)
+        
+        return " ".join(cmd_parts)
+    
+    elif tool == "fastsurfer":
+        # FastSurfer deep-learning based brain segmentation and surface reconstruction
+        # Docker image: deepmi/fastsurfer
+        # Documentation: https://github.com/Deep-MI/FastSurfer
+        
+        if "fs_license" not in options:
+            raise ValueError("FreeSurfer license file path is required for FastSurfer")
+        
+        # Build subject ID with session and run if present
+        subject_id = f"sub-{options['participant_label']}"
+        if options.get('session'):
+            subject_id += f"_ses-{options['session']}"
+        if options.get('run'):
+            subject_id += f"_run-{options['run']}"
+        
+        # Convert host paths to container paths
+        rawdata_host = Path(options['rawdata'])
+        t1w_host = Path(options['t1w'])
+        
+        # Get relative path from rawdata to t1w file
+        try:
+            t1w_relative = t1w_host.relative_to(rawdata_host)
+            t1w_container = f"/data/{t1w_relative}"
+        except ValueError:
+            t1w_container = str(t1w_host)
+        
+        # Build base command with GPU support
+        # FastSurfer strongly benefits from GPU acceleration
+        device = options.get('device', 'auto')
+        nv_flag = "--nv" if device != 'cpu' else ""
+        
+        cmd_parts = [
+            f"apptainer exec {nv_flag}",
+            f"-B {options['fs_license']}:/fs_license/license.txt:ro",
+            f"-B {options['rawdata']}:/data:ro",
+            f"-B {options['derivatives']}:/output",
+            f"{options['apptainer_img']}",
+            f"/fastsurfer/run_fastsurfer.sh",
+            f"--sid {subject_id}",
+            f"--sd /output/{options['output_label']}",
+            f"--t1 {t1w_container}",
+            f"--fs_license /fs_license/license.txt",
+        ]
+        
+        # Add processing mode flags
+        if options.get('seg_only', False):
+            cmd_parts.append("--seg_only")
+        elif options.get('surf_only', False):
+            cmd_parts.append("--surf_only")
+        
+        # Add 3T atlas flag
+        if options.get('three_tesla', False):
+            cmd_parts.append("--3T")
+        
+        # Add threads
+        threads = options.get('threads', 4)
+        cmd_parts.append(f"--threads {threads}")
+        
+        # Add device specification
+        if device and device != 'auto':
+            cmd_parts.append(f"--device {device}")
+        
+        # Add voxel size
+        vox_size = options.get('vox_size', 'min')
+        if vox_size:
+            cmd_parts.append(f"--vox_size {vox_size}")
+        
+        # Add optional module flags
+        if options.get('no_cereb', False):
+            cmd_parts.append("--no_cereb")
+        
+        if options.get('no_hypothal', False):
+            cmd_parts.append("--no_hypothal")
+        
+        if options.get('no_biasfield', False):
+            cmd_parts.append("--no_biasfield")
+        
+        # Add T2 image if provided (for hypothalamus segmentation)
+        t2_path = options.get('t2')
+        if t2_path:
+            t2_host = Path(t2_path)
+            try:
+                t2_relative = t2_host.relative_to(rawdata_host)
+                t2_container = f"/data/{t2_relative}"
+            except ValueError:
+                t2_container = str(t2_host)
+            cmd_parts.append(f"--t2 {t2_container}")
         
         return " ".join(cmd_parts)
     
@@ -598,11 +713,14 @@ def launch_apptainer(apptainer_cmd: str) -> int:
     logger.info(f"Command:\n{apptainer_cmd}")
     logger.info("=" * 80)
     
-    exit_code = os.system(apptainer_cmd)
-    # os.system returns the exit status in the higher byte
-    # We need to shift it to get the actual exit code
-    actual_exit_code = exit_code >> 8
-    return actual_exit_code
+    try:
+        # Run with shell=True to preserve full command string semantics
+        completed = subprocess.run(apptainer_cmd, shell=True)
+        return completed.returncode
+    except KeyboardInterrupt:
+        logger.error("Apptainer run interrupted by user (KeyboardInterrupt)")
+        # Use 130 to indicate termination by SIGINT
+        return 130
 
 
 def get_additional_contrasts(

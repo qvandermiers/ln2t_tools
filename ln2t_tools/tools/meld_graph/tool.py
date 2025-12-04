@@ -53,12 +53,6 @@ class MELDGraphTool(BaseTool):
             parser: Argument parser to add arguments to
         """
         parser.add_argument(
-            "--participants-file",
-            type=str,
-            help="Path to a text file with one subject ID per line "
-                 "(with or without 'sub-' prefix), used for harmonization runs"
-        )
-        parser.add_argument(
             "--fs-version",
             default=DEFAULT_MELD_FS_VERSION,
             help=f"FreeSurfer version to use as input (default: {DEFAULT_MELD_FS_VERSION})"
@@ -71,21 +65,11 @@ class MELDGraphTool(BaseTool):
         parser.add_argument(
             "--harmonize",
             action="store_true",
-            help="Compute harmonization parameters for the provided cohort"
-        )
-        parser.add_argument(
-            "--harmonize-only",
-            action="store_true",
-            help="Compute harmonization parameters only (requires --harmo-code)"
+            help="Compute harmonization parameters for the provided cohort (requires --harmo-code)"
         )
         parser.add_argument(
             "--harmo-code",
             help="Harmonization code for scanner (e.g., H1, H2)"
-        )
-        parser.add_argument(
-            "--demographics",
-            help="Path to demographics CSV file "
-                 "(optional - auto-generated from participants.tsv if not provided)"
         )
         parser.add_argument(
             "--use-precomputed-fs",
@@ -93,9 +77,9 @@ class MELDGraphTool(BaseTool):
             help="Use precomputed FreeSurfer outputs instead of running FreeSurfer"
         )
         parser.add_argument(
-            "--skip-segmentation",
+            "--skip-feature-extraction",
             action="store_true",
-            help="Skip FreeSurfer segmentation step (use with --use-precomputed-fs)"
+            help="Skip MELD feature extraction (only use if .sm3.mgh files already exist from a previous run)"
         )
         parser.add_argument(
             "--no-gpu",
@@ -169,10 +153,10 @@ class MELDGraphTool(BaseTool):
                     f"Missing: {missing}"
                 )
         
-        # If harmonize-only, check harmo-code is provided
-        harmonize_only = getattr(args, 'harmonize_only', False)
-        if harmonize_only and not getattr(args, 'harmo_code', None):
-            return False, "--harmo-code is required when using --harmonize-only"
+        # If harmonize, check harmo-code is provided
+        harmonize = getattr(args, 'harmonize', False)
+        if harmonize and not getattr(args, 'harmo_code', None):
+            return False, "--harmo-code is required when using --harmonize"
         
         return True, ""
     
@@ -285,16 +269,12 @@ class MELDGraphTool(BaseTool):
         if harmo_code:
             cmd.extend(["--harmo-code", harmo_code])
         
-        demographics = getattr(args, 'demographics', None)
-        if demographics:
-            cmd.extend(["--demographics", demographics])
+        skip_feature_extraction = getattr(args, 'skip_feature_extraction', False)
+        if skip_feature_extraction:
+            cmd.append("--skip-feature-extraction")
         
-        skip_segmentation = getattr(args, 'skip_segmentation', False)
-        if skip_segmentation:
-            cmd.append("--skip-segmentation")
-        
-        harmonize_only = getattr(args, 'harmonize_only', False)
-        if harmonize_only:
+        harmonize = getattr(args, 'harmonize', False)
+        if harmonize:
             cmd.append("--harmo-only")
         
         # Additional options
@@ -344,7 +324,4 @@ class MELDGraphTool(BaseTool):
         Returns:
             True if harmonization workflow is requested
         """
-        return (
-            getattr(args, 'harmonize', False) or
-            getattr(args, 'harmonize_only', False)
-        )
+        return getattr(args, 'harmonize', False)

@@ -1,9 +1,11 @@
 """
-FreeSurfer tool implementation.
+FastSurfer tool implementation.
 
-FreeSurfer performs cortical reconstruction and segmentation from T1-weighted
-MRI images, optionally using T2w or FLAIR images for improved pial surface
-estimation.
+FastSurfer is a fast and accurate deep-learning based neuroimaging pipeline
+that provides FreeSurfer-compatible outputs with significantly reduced
+processing time. It consists of:
+  - FastSurferCNN: Deep learning segmentation (~5 min on GPU)
+  - recon-surf: Surface reconstruction (~60-90 min)
 """
 
 import argparse
@@ -14,65 +16,136 @@ from typing import List, Optional
 from bids import BIDSLayout
 
 from ln2t_tools.tools.base import BaseTool
-from ln2t_tools.utils.defaults import DEFAULT_FS_VERSION
+from ln2t_tools.utils.defaults import DEFAULT_FASTSURFER_VERSION
 
 logger = logging.getLogger(__name__)
 
 
-class FreeSurferTool(BaseTool):
-    """FreeSurfer cortical reconstruction tool.
+class FastSurferTool(BaseTool):
+    """FastSurfer deep-learning based neuroimaging tool.
     
-    FreeSurfer provides a full processing stream for structural MRI data,
-    including skull stripping, cortical surface reconstruction, cortical
-    and subcortical segmentation, and surface-based registration.
+    FastSurfer is a fast and extensively validated deep-learning pipeline
+    for the fully automated processing of structural human brain MRIs.
+    It provides FreeSurfer-compatible outputs with dramatically reduced
+    processing time.
     
-    This tool automatically detects T2w and FLAIR images when available
-    and uses them to improve pial surface estimation.
+    Key features:
+    - FastSurferCNN: Whole brain segmentation into 95 classes in ~5 minutes (GPU)
+    - CerebNet: Cerebellum sub-segmentation
+    - HypVINN: Hypothalamus sub-segmentation
+    - recon-surf: Cortical surface reconstruction in ~60-90 minutes
+    - Full FreeSurfer compatibility for downstream analysis
     """
     
-    name = "freesurfer"
-    help_text = "FreeSurfer cortical reconstruction"
+    name = "fastsurfer"
+    help_text = "FastSurfer deep-learning brain segmentation and surface reconstruction"
     description = """
-FreeSurfer Cortical Reconstruction
+FastSurfer Deep-Learning Neuroimaging Pipeline
 
-FreeSurfer provides automated cortical reconstruction and volumetric
-segmentation of brain MRI data. Key outputs include:
+FastSurfer provides fast and accurate brain MRI analysis using deep learning:
 
-  - Skull-stripped brain volumes
-  - White matter and pial surface meshes
-  - Cortical parcellations (Desikan-Killiany, Destrieux)
-  - Subcortical segmentation
-  - Cortical thickness maps
+  Segmentation (~5 min on GPU):
+    - Whole brain segmentation (95 classes, DKTatlas-compatible)
+    - Cerebellum sub-segmentation (CerebNet)
+    - Hypothalamus sub-segmentation (HypVINN)
+    - Bias field correction and partial volume statistics
 
-The tool automatically uses T2w or FLAIR images when available for
-improved pial surface estimation.
+  Surface Reconstruction (~60-90 min):
+    - Cortical surface reconstruction (white/pial surfaces)
+    - Spherical mapping and registration
+    - Cortical thickness and parcellation
+    - Full FreeSurfer output compatibility
 
-Typical runtime: 6-12 hours per subject
+Processing modes:
+  - Full pipeline (default): segmentation + surface reconstruction
+  - Segmentation only (--seg-only): ~5 min, volumetric outputs only
+  - Surface only (--surf-only): requires prior segmentation
+
+Typical runtime: ~1-1.5 hours (full), ~5 min (seg-only) on GPU
 """
-    default_version = DEFAULT_FS_VERSION
-    requires_gpu = False
+    default_version = DEFAULT_FASTSURFER_VERSION
+    requires_gpu = True  # GPU strongly recommended for deep learning
     
     @classmethod
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
-        """Add FreeSurfer-specific CLI arguments.
+        """Add FastSurfer-specific CLI arguments.
         
-        FreeSurfer currently uses only common arguments (dataset,
-        participant-label, version, etc.). Tool-specific options
-        like T2w/FLAIR are auto-detected.
+        Parameters
+        ----------
+        parser : argparse.ArgumentParser
+            The subparser for this tool
         """
         parser.add_argument(
-            "--skip-surface-recon",
+            "--seg-only",
             action="store_true",
             default=False,
-            help="Skip surface reconstruction by running only autorecon1 "
-                 "(motion correction, normalization, skull stripping). "
-                 "Useful for quick preprocessing or when only volumetric "
-                 "outputs are needed."
+            help="Run segmentation only (skip surface reconstruction). "
+                 "Fast mode (~5 min on GPU), outputs volumetric segmentations only."
+        )
+        parser.add_argument(
+            "--surf-only",
+            action="store_true",
+            default=False,
+            help="Run surface reconstruction only (requires prior segmentation). "
+                 "Use when segmentation already exists."
+        )
+        parser.add_argument(
+            "--3T",
+            action="store_true",
+            dest="three_tesla",
+            default=False,
+            help="Use 3T atlas for Talairach registration. "
+                 "Provides better ICV estimates for 3T scanner data."
+        )
+        parser.add_argument(
+            "--threads",
+            type=int,
+            default=4,
+            help="Number of threads to use (default: 4). "
+                 "If >1 for surface reconstruction, hemispheres are processed in parallel."
+        )
+        parser.add_argument(
+            "--device",
+            choices=["auto", "cpu", "cuda", "mps"],
+            default="auto",
+            help="Device for neural network inference (default: auto). "
+                 "'cuda' for NVIDIA GPU, 'mps' for Apple Silicon, 'cpu' for CPU-only."
+        )
+        parser.add_argument(
+            "--vox-size",
+            type=str,
+            default="min",
+            help="Target voxel size: 'min' (auto from input), or value 0.7-1.0 (default: min). "
+                 "Values <1mm enable high-resolution processing."
+        )
+        parser.add_argument(
+            "--no-cereb",
+            action="store_true",
+            default=False,
+            help="Skip cerebellum sub-segmentation (CerebNet)."
+        )
+        parser.add_argument(
+            "--no-hypothal",
+            action="store_true",
+            default=False,
+            help="Skip hypothalamus sub-segmentation (HypVINN)."
+        )
+        parser.add_argument(
+            "--no-biasfield",
+            action="store_true",
+            default=False,
+            help="Skip bias field correction and partial volume-corrected statistics."
+        )
+        parser.add_argument(
+            "--t2",
+            type=Path,
+            default=None,
+            help="Path to T2w image for improved hypothalamus segmentation (optional)."
         )
     
     @classmethod
     def validate_args(cls, args: argparse.Namespace) -> bool:
-        """Validate FreeSurfer arguments.
+        """Validate FastSurfer arguments.
         
         Parameters
         ----------
@@ -84,7 +157,22 @@ Typical runtime: 6-12 hours per subject
         bool
             True if arguments are valid
         """
-        # No specific validation needed for FreeSurfer
+        # Check for conflicting options
+        if getattr(args, 'seg_only', False) and getattr(args, 'surf_only', False):
+            logger.error("Cannot use --seg-only and --surf-only together")
+            return False
+        
+        # Validate vox_size
+        vox_size = getattr(args, 'vox_size', 'min')
+        if vox_size != 'min':
+            try:
+                vox_val = float(vox_size)
+                if vox_val < 0.7 or vox_val > 1.0:
+                    logger.warning(f"Voxel size {vox_val}mm is outside recommended range (0.7-1.0mm)")
+            except ValueError:
+                logger.error(f"Invalid vox_size value: {vox_size}")
+                return False
+        
         return True
     
     @classmethod
@@ -133,7 +221,7 @@ Typical runtime: 6-12 hours per subject
         session: Optional[str] = None,
         run: Optional[str] = None
     ) -> Path:
-        """Get FreeSurfer output directory path.
+        """Get FastSurfer output directory path.
         
         Parameters
         ----------
@@ -154,7 +242,7 @@ Typical runtime: 6-12 hours per subject
             Full path to output directory
         """
         version = args.version or cls.default_version
-        output_label = args.output_label or f"freesurfer_{version}"
+        output_label = args.output_label or f"fastsurfer_{version}"
         
         # Build subject directory
         subdir = cls._build_subdir(participant_label, session, run)
@@ -172,7 +260,7 @@ Typical runtime: 6-12 hours per subject
         apptainer_img: str,
         **kwargs
     ) -> List[str]:
-        """Build FreeSurfer Apptainer command.
+        """Build FastSurfer Apptainer command.
         
         Parameters
         ----------
@@ -220,31 +308,33 @@ Typical runtime: 6-12 hours per subject
                 session = entities.get('session')
                 run = entities.get('run')
         
-        # Get additional contrasts
-        additional_contrasts = cls._get_additional_contrasts(
-            layout, participant_label, session, run
-        )
-        
-        # Build FreeSurfer options
-        fs_options = cls._build_fs_options(
-            additional_contrasts, dataset_rawdata
-        )
-        
         version = args.version or cls.default_version
-        output_label = args.output_label or f"freesurfer_{version}"
+        output_label = args.output_label or f"fastsurfer_{version}"
         
-        # Check for skip_surface_recon option
-        skip_surface_recon = getattr(args, 'skip_surface_recon', False)
-        if skip_surface_recon:
-            logger.info("Surface reconstruction will be skipped (using -autorecon1 only)")
-            logger.info("  This performs: motion correction, intensity normalization, "
-                       "Talairach registration, and skull stripping")
-            logger.info("  Surface-based outputs (white/pial surfaces, parcellations) "
-                       "will NOT be generated")
+        # Log processing mode
+        seg_only = getattr(args, 'seg_only', False)
+        surf_only = getattr(args, 'surf_only', False)
+        
+        if seg_only:
+            logger.info("Running FastSurfer in segmentation-only mode (~5 min on GPU)")
+            logger.info("  Surface reconstruction will be skipped")
+            logger.info("  Outputs: volumetric segmentations, parcellations, and statistics")
+        elif surf_only:
+            logger.info("Running FastSurfer in surface-only mode")
+            logger.info("  Requires prior segmentation to exist")
+        else:
+            logger.info("Running full FastSurfer pipeline")
+            logger.info("  Segmentation: ~5 min on GPU")
+            logger.info("  Surface reconstruction: ~60-90 min")
+        
+        # Log device info
+        device = getattr(args, 'device', 'auto')
+        if device == 'cpu':
+            logger.warning("CPU mode selected - processing will be significantly slower")
         
         # Build command using utility function
         cmd = build_apptainer_cmd(
-            tool="freesurfer",
+            tool="fastsurfer",
             fs_license=args.fs_license,
             rawdata=str(dataset_rawdata),
             derivatives=str(dataset_derivatives),
@@ -254,8 +344,16 @@ Typical runtime: 6-12 hours per subject
             output_label=output_label,
             session=session,
             run=run,
-            additional_options=" ".join(fs_options) if fs_options else "",
-            skip_surface_recon=skip_surface_recon
+            seg_only=seg_only,
+            surf_only=surf_only,
+            three_tesla=getattr(args, 'three_tesla', False),
+            threads=getattr(args, 'threads', 4),
+            device=device,
+            vox_size=getattr(args, 'vox_size', 'min'),
+            no_cereb=getattr(args, 'no_cereb', False),
+            no_hypothal=getattr(args, 'no_hypothal', False),
+            no_biasfield=getattr(args, 'no_biasfield', False),
+            t2=getattr(args, 't2', None),
         )
         
         return [cmd] if isinstance(cmd, str) else cmd
@@ -271,9 +369,9 @@ Typical runtime: 6-12 hours per subject
         apptainer_img: str,
         **kwargs
     ) -> bool:
-        """Process all T1w images for a subject with FreeSurfer.
+        """Process all T1w images for a subject with FastSurfer.
         
-        FreeSurfer processes each T1w image separately, so this method
+        FastSurfer processes each T1w image separately, so this method
         iterates over all T1w files found for the participant.
         
         Parameters
@@ -326,7 +424,7 @@ Typical runtime: 6-12 hours per subject
                 continue
             
             # Log input files
-            cls._log_input_files(t1w, layout, participant_label, session, run, dataset_rawdata)
+            cls._log_input_files(t1w, layout, participant_label, session, run)
             
             # Build command
             cmd = cls.build_command(
@@ -373,79 +471,12 @@ Typical runtime: 6-12 hours per subject
         return "_".join(parts)
     
     @staticmethod
-    def _get_additional_contrasts(
-        layout: BIDSLayout,
-        participant_label: str,
-        session: Optional[str],
-        run: Optional[str]
-    ) -> dict:
-        """Get T2w and FLAIR images if available."""
-        contrasts = {'t2w': None, 'flair': None}
-        
-        # Build query filters
-        filters = {
-            'subject': participant_label,
-            'scope': 'raw',
-            'extension': '.nii.gz',
-            'return_type': 'filename'
-        }
-        if session:
-            filters['session'] = session
-        
-        # Look for T2w
-        t2w_files = layout.get(suffix='T2w', **filters)
-        if t2w_files:
-            contrasts['t2w'] = t2w_files[0]
-        
-        # Look for FLAIR
-        flair_files = layout.get(suffix='FLAIR', **filters)
-        if flair_files:
-            contrasts['flair'] = flair_files[0]
-        
-        return contrasts
-    
-    @staticmethod
-    def _build_fs_options(
-        additional_contrasts: dict,
-        dataset_rawdata: Path
-    ) -> List[str]:
-        """Build FreeSurfer command options for additional contrasts."""
-        fs_options = []
-        
-        if additional_contrasts['t2w']:
-            logger.info(f"Found T2w image")
-            t2w_host = Path(additional_contrasts['t2w'])
-            try:
-                t2w_relative = t2w_host.relative_to(dataset_rawdata)
-                t2w_container = f"/rawdata/{t2w_relative}"
-            except ValueError:
-                t2w_container = str(t2w_host)
-            fs_options.append(f"-T2 {t2w_container}")
-            fs_options.append("-T2pial")
-        
-        if additional_contrasts['flair']:
-            logger.info(f"Found FLAIR image")
-            flair_host = Path(additional_contrasts['flair'])
-            try:
-                flair_relative = flair_host.relative_to(dataset_rawdata)
-                flair_container = f"/rawdata/{flair_relative}"
-            except ValueError:
-                flair_container = str(flair_host)
-            fs_options.append(f"-FLAIR {flair_container}")
-            fs_options.append("-FLAIRpial")
-            if additional_contrasts['t2w']:
-                logger.info("Both T2w and FLAIR found, using only FLAIR for pial surface")
-        
-        return fs_options
-    
-    @staticmethod
     def _log_input_files(
         t1w: str,
         layout: BIDSLayout,
         participant_label: str,
         session: Optional[str],
-        run: Optional[str],
-        dataset_rawdata: Path
+        run: Optional[str]
     ) -> None:
         """Log input file information."""
         logger.info("Verifying input files exist on host:")
@@ -456,16 +487,3 @@ Typical runtime: 6-12 hours per subject
         else:
             logger.error(f"    ✗ File NOT found!")
             raise FileNotFoundError(f"T1w file not found: {t1w_path}")
-        
-        additional = FreeSurferTool._get_additional_contrasts(
-            layout, participant_label, session, run
-        )
-        
-        for name, path in [('T2w', additional['t2w']), ('FLAIR', additional['flair'])]:
-            if path:
-                p = Path(path)
-                logger.info(f"  {name}: {p}")
-                if p.exists():
-                    logger.info(f"    ✓ File exists (size: {p.stat().st_size / (1024*1024):.2f} MB)")
-                else:
-                    logger.warning(f"    ✗ File NOT found!")

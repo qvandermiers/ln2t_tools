@@ -1,0 +1,60 @@
+Bootstrap: docker
+From: deepmi/fastsurfer:cuda-v2.4.2
+
+%labels
+    Author LN2T Lab
+    Version 2.4.2
+    Description FastSurfer deep-learning brain segmentation and surface reconstruction
+
+%help
+    FastSurfer - Fast and accurate deep-learning based neuroimaging pipeline
+    
+    FastSurfer provides FreeSurfer-compatible outputs with significantly 
+    reduced processing time using deep learning:
+    
+    - FastSurferCNN: Whole brain segmentation (~5 min on GPU)
+    - CerebNet: Cerebellum sub-segmentation
+    - HypVINN: Hypothalamus sub-segmentation  
+    - recon-surf: Cortical surface reconstruction (~60-90 min)
+    
+    Docker source: deepmi/fastsurfer:cuda-v2.4.2
+    Documentation: https://github.com/Deep-MI/FastSurfer
+    
+    Requirements:
+    - NVIDIA GPU with CUDA support (recommended)
+    - FreeSurfer license file
+    - At least 8GB system memory, 8GB GPU memory recommended
+    
+    Usage with Apptainer:
+    
+    apptainer exec --nv \
+        -B /path/to/license.txt:/fs_license/license.txt:ro \
+        -B /path/to/input:/data:ro \
+        -B /path/to/output:/output \
+        fastsurfer_2.4.2.sif \
+        /fastsurfer/run_fastsurfer.sh \
+        --sid subject_id \
+        --sd /output \
+        --t1 /data/T1w.nii.gz \
+        --fs_license /fs_license/license.txt
+    
+    For segmentation only (fast, ~5 min on GPU):
+        Add --seg_only flag
+    
+    For surface reconstruction only (requires prior segmentation):
+        Add --surf_only flag
+    
+    For CPU-only processing (slower):
+        Remove --nv flag and add --device cpu
+
+%post
+    # FastSurfer image already contains everything needed
+    # Just verify the installation
+    echo "FastSurfer container built from deepmi/fastsurfer:cuda-v2.4.2"
+    
+%environment
+    # Ensure FastSurfer scripts are in path
+    export PATH=/fastsurfer:$PATH
+
+%runscript
+    exec /fastsurfer/run_fastsurfer.sh "$@"

@@ -14,6 +14,7 @@ DEFAULT_APPTAINER_DIR = Path("/opt/apptainer")
 
 # Tool versions
 DEFAULT_FS_VERSION = "7.3.2"
+DEFAULT_FASTSURFER_VERSION = "cuda-v2.4.2"  # Full Docker tag for reproducibility
 DEFAULT_FMRIPREP_VERSION = "25.1.4"
 DEFAULT_QSIPREP_VERSION = "1.0.1"
 DEFAULT_QSIRECON_VERSION = "1.1.1"
