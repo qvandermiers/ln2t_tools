@@ -337,6 +337,33 @@ by administrators in the rawdata directory.
         action="store_true",
         help="Keep temporary files created by dcm2bids (tmp_dcm2bids directory in rawdata)"
     )
+    # MRS pre-import options
+    parser_import.add_argument(
+        "--pre-import",
+        action="store_true",
+        help="Run pre-import step for MRS: gather P-files from scanner backup locations"
+    )
+    parser_import.add_argument(
+        "--mrraw-dir",
+        type=Path,
+        help="Path to scanner mrraw directory (default: /home/ln2t-worker/PETMR/backup/auto/daily_backups/mrraw)"
+    )
+    parser_import.add_argument(
+        "--mrs-tmp-dir",
+        type=Path,
+        help="Path to scanner tmp directory with exam folders (default: /home/ln2t-worker/PETMR/backup/auto/daily_backups/tmp)"
+    )
+    parser_import.add_argument(
+        "--tolerance-hours",
+        type=float,
+        default=1.0,
+        help="Time tolerance in hours for matching P-files by datetime (default: 1.0)"
+    )
+    parser_import.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be done without actually copying files (for --pre-import)"
+    )
 
     return parser.parse_args()
 

@@ -7,7 +7,7 @@ This module handles importing various types of source data into BIDS format:
 """
 
 from .dicom import import_dicom
-from .mrs import import_mrs
+from .mrs import import_mrs, pre_import_mrs
 from .physio import import_physio
 
-__all__ = ['import_dicom', 'import_mrs', 'import_physio']
+__all__ = ['import_dicom', 'import_mrs', 'pre_import_mrs', 'import_physio']

@@ -6,11 +6,444 @@ import shutil
 import tarfile
 import os
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
+from datetime import datetime, timedelta
 import json
 
 logger = logging.getLogger(__name__)
 
+# Default paths for scanner MRS data locations
+DEFAULT_MRRAW_DIR = Path("/home/ln2t-worker/PETMR/backup/auto/daily_backups/mrraw")
+DEFAULT_TMP_DIR = Path("/home/ln2t-worker/PETMR/backup/auto/daily_backups/tmp")
+
+
+# =============================================================================
+# Pre-import functions: Gather P-files from scanner backup locations
+# =============================================================================
+
+def get_dicom_metadata(dicom_file: Path) -> Dict:
+    """Extract relevant metadata from a DICOM file.
+    
+    Uses pydicom to read exam date/time and exam number from a DICOM file.
+    
+    Parameters
+    ----------
+    dicom_file : Path
+        Path to a DICOM file
+        
+    Returns
+    -------
+    Dict
+        Dictionary with keys: 'exam_date', 'exam_time', 'exam_datetime', 'exam_number'
+        Values are None if not found
+    """
+    try:
+        import pydicom
+    except ImportError:
+        logger.error("pydicom is required for MRS pre-import. Install with: pip install pydicom")
+        raise
+    
+    metadata = {
+        'exam_date': None,
+        'exam_time': None,
+        'exam_datetime': None,
+        'exam_number': None,
+        'patient_id': None,
+    }
+    
+    try:
+        ds = pydicom.dcmread(dicom_file, stop_before_pixels=True)
+        
+        # Get study date and time
+        if hasattr(ds, 'StudyDate'):
+            metadata['exam_date'] = ds.StudyDate  # Format: YYYYMMDD
+        if hasattr(ds, 'StudyTime'):
+            metadata['exam_time'] = ds.StudyTime  # Format: HHMMSS.ffffff
+        
+        # Parse into datetime object
+        if metadata['exam_date']:
+            try:
+                date_str = metadata['exam_date']
+                time_str = metadata['exam_time'] or '000000'
+                # Handle time with or without fractional seconds
+                time_str = time_str.split('.')[0][:6]  # Take only HHMMSS
+                dt_str = f"{date_str}{time_str}"
+                metadata['exam_datetime'] = datetime.strptime(dt_str, '%Y%m%d%H%M%S')
+            except ValueError as e:
+                logger.warning(f"Could not parse datetime from {date_str} {time_str}: {e}")
+        
+        # Get exam number (StudyID or AccessionNumber depending on scanner)
+        # GE scanners typically use StudyID
+        if hasattr(ds, 'StudyID'):
+            metadata['exam_number'] = ds.StudyID
+        elif hasattr(ds, 'AccessionNumber'):
+            metadata['exam_number'] = ds.AccessionNumber
+        
+        # Get patient ID for reference
+        if hasattr(ds, 'PatientID'):
+            metadata['patient_id'] = ds.PatientID
+            
+    except Exception as e:
+        logger.error(f"Failed to read DICOM metadata from {dicom_file}: {e}")
+    
+    return metadata
+
+
+def find_dicom_for_participant(
+    dicom_dir: Path,
+    participant_label: str,
+    ds_initials: str,
+    session: Optional[str] = None
+) -> Optional[Path]:
+    """Find a DICOM file for a given participant.
+    
+    Parameters
+    ----------
+    dicom_dir : Path
+        Path to the DICOM source directory
+    participant_label : str
+        Participant label (without 'sub-' prefix)
+    ds_initials : str
+        Dataset initials (e.g., 'CB', 'HP')
+    session : Optional[str]
+        Session label (without 'ses-' prefix)
+        
+    Returns
+    -------
+    Optional[Path]
+        Path to a DICOM file, or None if not found
+    """
+    # Build expected source directory name
+    if session:
+        source_name = f"{ds_initials}{participant_label}SES{session}"
+    else:
+        source_name = f"{ds_initials}{participant_label}"
+    
+    # Check for directory
+    source_path = dicom_dir / source_name
+    if not source_path.exists():
+        # Try extracting from archive
+        archive_path = dicom_dir / f"{source_name}.tar.gz"
+        if archive_path.exists():
+            logger.info(f"Extracting DICOM archive for metadata: {archive_path.name}")
+            try:
+                with tarfile.open(archive_path, 'r:gz') as tar:
+                    tar.extractall(path=dicom_dir)
+                if not source_path.exists():
+                    logger.error(f"Extracted archive but {source_name} not found")
+                    return None
+            except Exception as e:
+                logger.error(f"Failed to extract DICOM archive: {e}")
+                return None
+        else:
+            logger.error(f"DICOM source not found: {source_name}")
+            return None
+    
+    # Find a DICOM file (any will do, metadata should be consistent)
+    for root, dirs, files in os.walk(source_path):
+        for f in files:
+            filepath = Path(root) / f
+            # Skip hidden files and common non-DICOM files
+            if f.startswith('.') or f.endswith(('.txt', '.json', '.csv', '.tar.gz')):
+                continue
+            # Check if it looks like a DICOM (no extension or .dcm)
+            if not filepath.suffix or filepath.suffix.lower() == '.dcm':
+                return filepath
+    
+    logger.error(f"No DICOM files found in {source_path}")
+    return None
+
+
+def find_pfiles_by_datetime(
+    mrraw_dir: Path,
+    exam_datetime: datetime,
+    tolerance_hours: float = 1.0
+) -> List[Path]:
+    """Find P-files in mrraw directory matching exam datetime.
+    
+    P-files in mrraw are named like P98816.7 and we match based on file
+    creation/modification time.
+    
+    Parameters
+    ----------
+    mrraw_dir : Path
+        Path to the mrraw directory
+    exam_datetime : datetime
+        The exam datetime from DICOM metadata
+    tolerance_hours : float
+        Time tolerance in hours for matching files
+        
+    Returns
+    -------
+    List[Path]
+        List of P-file paths matching the datetime criteria
+    """
+    if not mrraw_dir.exists():
+        logger.warning(f"mrraw directory not found: {mrraw_dir}")
+        return []
+    
+    matching_files = []
+    tolerance = timedelta(hours=tolerance_hours)
+    
+    for item in mrraw_dir.iterdir():
+        # P-files have names like P98816.7
+        if not item.name.startswith('P'):
+            continue
+        
+        # Skip symlinks
+        if item.is_symlink():
+            continue
+        
+        # Check if it's a file (not directory)
+        if not item.is_file():
+            continue
+        
+        # Get file modification time
+        try:
+            mtime = datetime.fromtimestamp(item.stat().st_mtime)
+            
+            # Check if within tolerance
+            if abs(mtime - exam_datetime) <= tolerance:
+                matching_files.append(item)
+                logger.debug(f"Found matching P-file: {item.name} (mtime: {mtime})")
+        except Exception as e:
+            logger.warning(f"Could not check file time for {item}: {e}")
+    
+    return matching_files
+
+
+def find_pfiles_by_exam_number(
+    tmp_dir: Path,
+    exam_number: str
+) -> List[Path]:
+    """Find P-files in tmp directory by exam number.
+    
+    The tmp directory structure is:
+    tmp/{exam_number}/... (with P-files somewhere inside)
+    
+    Parameters
+    ----------
+    tmp_dir : Path
+        Path to the tmp directory
+    exam_number : str
+        The exam number from DICOM metadata
+        
+    Returns
+    -------
+    List[Path]
+        List of P-file paths found for this exam
+    """
+    if not tmp_dir.exists():
+        logger.warning(f"tmp directory not found: {tmp_dir}")
+        return []
+    
+    exam_dir = tmp_dir / str(exam_number)
+    if not exam_dir.exists():
+        logger.debug(f"No exam directory found: {exam_dir}")
+        return []
+    
+    matching_files = []
+    
+    # Recursively search for P-files
+    for root, dirs, files in os.walk(exam_dir):
+        for f in files:
+            # P-files have names like P98816.7
+            if f.startswith('P') and '.' in f:
+                # Basic validation: second part should be numeric-ish
+                parts = f.split('.')
+                if len(parts) == 2 and parts[0][1:].isdigit():
+                    filepath = Path(root) / f
+                    if filepath.is_file() and not filepath.is_symlink():
+                        matching_files.append(filepath)
+                        logger.debug(f"Found P-file in exam dir: {filepath}")
+    
+    return matching_files
+
+
+def pre_import_mrs(
+    dataset: str,
+    participant_labels: List[str],
+    sourcedata_dir: Path,
+    ds_initials: str,
+    session: Optional[str] = None,
+    mrraw_dir: Optional[Path] = None,
+    tmp_dir: Optional[Path] = None,
+    tolerance_hours: float = 1.0,
+    dry_run: bool = False
+) -> bool:
+    """Pre-import MRS data: gather P-files from scanner backup locations.
+    
+    This function:
+    1. For each participant, finds their DICOM data to extract exam metadata
+    2. Uses the exam datetime to find matching P-files in mrraw directory
+    3. Uses the exam number to find P-files in the tmp directory
+    4. Copies all found P-files to {sourcedata_dir}/mrs/{ds_initials}{participant}
+    
+    Parameters
+    ----------
+    dataset : str
+        Dataset name
+    participant_labels : List[str]
+        List of participant IDs (without 'sub-' prefix)
+    sourcedata_dir : Path
+        Path to sourcedata directory
+    ds_initials : str
+        Dataset initials prefix (e.g., 'CB', 'HP')
+    session : Optional[str]
+        Session label (without 'ses-' prefix)
+    mrraw_dir : Optional[Path]
+        Path to mrraw directory. Defaults to DEFAULT_MRRAW_DIR
+    tmp_dir : Optional[Path]
+        Path to tmp directory. Defaults to DEFAULT_TMP_DIR
+    tolerance_hours : float
+        Time tolerance in hours for matching P-files by datetime
+    dry_run : bool
+        If True, only report what would be done without copying files
+        
+    Returns
+    -------
+    bool
+        True if pre-import successful for at least one participant
+    """
+    # Set default paths
+    if mrraw_dir is None:
+        mrraw_dir = DEFAULT_MRRAW_DIR
+    if tmp_dir is None:
+        tmp_dir = DEFAULT_TMP_DIR
+    
+    logger.info(f"{'[DRY RUN] ' if dry_run else ''}MRS Pre-import")
+    logger.info(f"  Dataset: {dataset}")
+    logger.info(f"  Participants: {participant_labels}")
+    logger.info(f"  mrraw dir: {mrraw_dir}")
+    logger.info(f"  tmp dir: {tmp_dir}")
+    logger.info(f"  Tolerance: {tolerance_hours} hours")
+    
+    # Check source directories exist
+    dicom_dir = sourcedata_dir / "dicom"
+    if not dicom_dir.exists():
+        logger.error(f"DICOM directory not found: {dicom_dir}")
+        logger.error("Cannot extract exam metadata without DICOM files")
+        return False
+    
+    # Create mrs directory in sourcedata
+    mrs_output_dir = sourcedata_dir / "mrs"
+    if not dry_run:
+        mrs_output_dir.mkdir(parents=True, exist_ok=True)
+    
+    success_count = 0
+    failed_participants = []
+    
+    for participant in participant_labels:
+        participant_id = participant.replace('sub-', '')
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Processing participant: {participant_id}")
+        logger.info(f"{'='*60}")
+        
+        # Step 1: Find DICOM file and extract metadata
+        dicom_file = find_dicom_for_participant(
+            dicom_dir, participant_id, ds_initials, session
+        )
+        
+        if dicom_file is None:
+            logger.error(f"Could not find DICOM for {participant_id}")
+            failed_participants.append(participant_id)
+            continue
+        
+        metadata = get_dicom_metadata(dicom_file)
+        
+        logger.info(f"  DICOM metadata:")
+        logger.info(f"    Exam Date: {metadata['exam_date']}")
+        logger.info(f"    Exam Time: {metadata['exam_time']}")
+        logger.info(f"    Exam Number: {metadata['exam_number']}")
+        logger.info(f"    Patient ID: {metadata['patient_id']}")
+        
+        if metadata['exam_datetime'] is None and metadata['exam_number'] is None:
+            logger.error(f"Could not extract exam datetime or exam number for {participant_id}")
+            failed_participants.append(participant_id)
+            continue
+        
+        # Step 2: Find P-files from both locations
+        pfiles = []
+        
+        # From mrraw by datetime
+        if metadata['exam_datetime'] is not None:
+            mrraw_pfiles = find_pfiles_by_datetime(
+                mrraw_dir, metadata['exam_datetime'], tolerance_hours
+            )
+            if mrraw_pfiles:
+                logger.info(f"  Found {len(mrraw_pfiles)} P-file(s) in mrraw by datetime")
+                pfiles.extend(mrraw_pfiles)
+            else:
+                logger.info(f"  No P-files found in mrraw matching datetime")
+        
+        # From tmp by exam number
+        if metadata['exam_number'] is not None:
+            tmp_pfiles = find_pfiles_by_exam_number(tmp_dir, metadata['exam_number'])
+            if tmp_pfiles:
+                logger.info(f"  Found {len(tmp_pfiles)} P-file(s) in tmp for exam {metadata['exam_number']}")
+                pfiles.extend(tmp_pfiles)
+            else:
+                logger.info(f"  No P-files found in tmp for exam number {metadata['exam_number']}")
+        
+        # Deduplicate (in case same file found via both methods)
+        pfiles = list(set(pfiles))
+        
+        if not pfiles:
+            logger.warning(f"No P-files found for {participant_id}")
+            failed_participants.append(participant_id)
+            continue
+        
+        logger.info(f"  Total P-files found: {len(pfiles)}")
+        for pf in pfiles:
+            logger.info(f"    - {pf}")
+        
+        # Step 3: Copy P-files to mrs directory
+        if session:
+            output_dir = mrs_output_dir / f"{ds_initials}{participant_id}SES{session}"
+        else:
+            output_dir = mrs_output_dir / f"{ds_initials}{participant_id}"
+        
+        if dry_run:
+            logger.info(f"  [DRY RUN] Would copy {len(pfiles)} P-file(s) to {output_dir}")
+        else:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            copied_count = 0
+            for pfile in pfiles:
+                dest = output_dir / pfile.name
+                if dest.exists():
+                    logger.info(f"  P-file already exists, skipping: {pfile.name}")
+                    copied_count += 1
+                    continue
+                
+                try:
+                    shutil.copy2(pfile, dest)
+                    logger.info(f"  ✓ Copied: {pfile.name}")
+                    copied_count += 1
+                except Exception as e:
+                    logger.error(f"  ✗ Failed to copy {pfile.name}: {e}")
+            
+            if copied_count > 0:
+                logger.info(f"  ✓ Copied {copied_count} P-file(s) for {participant_id}")
+                success_count += 1
+            else:
+                logger.error(f"  ✗ Failed to copy any P-files for {participant_id}")
+                failed_participants.append(participant_id)
+    
+    # Summary
+    logger.info(f"\n{'='*60}")
+    logger.info(f"MRS Pre-import Summary:")
+    logger.info(f"  Successful: {success_count}/{len(participant_labels)}")
+    if failed_participants:
+        logger.info(f"  Failed: {', '.join(failed_participants)}")
+    logger.info(f"{'='*60}\n")
+    
+    return success_count > 0
+
+
+# =============================================================================
+# Discovery and archive utility functions
+# =============================================================================
 
 def discover_participants_from_mrs_dir(
     mrs_dir: Path,

@@ -54,7 +54,7 @@ from ln2t_tools.utils.defaults import (
     DEFAULT_MELDGRAPH_VERSION,
     DEFAULT_MELD_FS_VERSION
 )
-from ln2t_tools.import_data import import_dicom, import_mrs, import_physio
+from ln2t_tools.import_data import import_dicom, import_mrs, pre_import_mrs, import_physio
 
 # Setup initial logging (will be reconfigured based on --verbosity)
 logging.basicConfig(
@@ -254,6 +254,45 @@ def handle_import(args):
     if venv_path:
         venv_path = Path(venv_path).resolve()
     
+    # Handle --pre-import for MRS data
+    if getattr(args, 'pre_import', False):
+        logger.info(f"\n{'='*60}")
+        logger.info("MRS PRE-IMPORT: Gathering P-files from scanner backup")
+        logger.info(f"{'='*60}")
+        
+        # For pre-import, we need ds_initials
+        ds_initials = getattr(args, 'ds_initials', None)
+        if not ds_initials:
+            logger.error("--ds-initials is required for MRS pre-import")
+            return
+        
+        # For pre-import, we need participant_labels
+        if not args.participant_label:
+            logger.error("--participant-label is required for MRS pre-import")
+            return
+        
+        pre_import_success = pre_import_mrs(
+            dataset=dataset,
+            participant_labels=args.participant_label,
+            sourcedata_dir=sourcedata_dir,
+            ds_initials=ds_initials,
+            session=getattr(args, 'session', None),
+            mrraw_dir=getattr(args, 'mrraw_dir', None),
+            tmp_dir=getattr(args, 'mrs_tmp_dir', None),
+            tolerance_hours=getattr(args, 'tolerance_hours', 1.0),
+            dry_run=getattr(args, 'dry_run', False)
+        )
+        
+        if pre_import_success:
+            logger.info("✓ MRS pre-import completed successfully")
+        else:
+            logger.error("✗ MRS pre-import failed")
+        
+        # After pre-import, exit unless user also wants to run the full import
+        if getattr(args, 'datatype', 'all') not in ['mrs', 'all']:
+            logger.info("Pre-import complete. Run with --datatype mrs to continue with BIDS conversion.")
+            return
+    
     # Determine which datatypes to import
     datatype_arg = getattr(args, 'datatype', 'all')
     datatypes = [datatype_arg] if datatype_arg != 'all' else ['dicom', 'mrs', 'physio']
@@ -334,7 +373,10 @@ def handle_import(args):
     logger.info("IMPORT SUMMARY")
     logger.info(f"{'='*60}")
     logger.info(f"Dataset: {dataset}")
-    logger.info(f"Participants: {len(args.participant_label)}")
+    if args.participant_label:
+        logger.info(f"Participants: {len(args.participant_label)}")
+    else:
+        logger.info("Participants: auto-discovered")
     
     for dtype, success in import_success.items():
         if dtype in datatypes or datatype_arg == 'all':
@@ -343,35 +385,36 @@ def handle_import(args):
     
     logger.info(f"{'='*60}\n")
     
-    # Show tree of imported data
-    logger.info("Validating imported data structure...")
-    for participant in args.participant_label:
-        participant_id = participant.replace('sub-', '')
-        subj_dir = rawdata_dir / f"sub-{participant_id}"
-        if subj_dir.exists():
-            # Try to run tree command
-            try:
-                result = subprocess.run(
-                    ['tree', str(subj_dir)],
-                    capture_output=True,
-                    text=True,
-                    timeout=10
-                )
-                if result.returncode == 0:
-                    logger.info(f"\n{result.stdout}")
-                else:
-                    # Fallback: list directories
-                    logger.info(f"\nStructure for sub-{participant_id}:")
-                    for item in sorted(subj_dir.rglob("*")):
-                        if item.is_file():
-                            logger.info(f"  {item.relative_to(rawdata_dir)}")
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                # tree command not available, just list top-level
-                logger.info(f"\nsub-{participant_id}:")
-                for item in sorted(subj_dir.iterdir()):
-                    logger.info(f"  {item.name}")
-        else:
-            logger.warning(f"Subject directory not created: {subj_dir}")
+    # Show tree of imported data (only if participants were specified)
+    if args.participant_label:
+        logger.info("Validating imported data structure...")
+        for participant in args.participant_label:
+            participant_id = participant.replace('sub-', '')
+            subj_dir = rawdata_dir / f"sub-{participant_id}"
+            if subj_dir.exists():
+                # Try to run tree command
+                try:
+                    result = subprocess.run(
+                        ['tree', str(subj_dir)],
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                    if result.returncode == 0:
+                        logger.info(f"\n{result.stdout}")
+                    else:
+                        # Fallback: list directories
+                        logger.info(f"\nStructure for sub-{participant_id}:")
+                        for item in sorted(subj_dir.rglob("*")):
+                            if item.is_file():
+                                logger.info(f"  {item.relative_to(rawdata_dir)}")
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    # tree command not available, just list top-level
+                    logger.info(f"\nsub-{participant_id}:")
+                    for item in sorted(subj_dir.iterdir()):
+                        logger.info(f"  {item.name}")
+            else:
+                logger.warning(f"Subject directory not created: {subj_dir}")
 
 
 def setup_directories(args) -> tuple[Path, Path, Path]:
