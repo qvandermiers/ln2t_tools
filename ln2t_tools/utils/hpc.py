@@ -950,7 +950,13 @@ def generate_hpc_script(
 """
     
     # Add GPU request for GPU-capable tools
-    if tool in ['meld_graph'] and not getattr(args, 'no_gpu', False):
+    # fastsurfer: GPU strongly recommended for deep learning segmentation
+    # meld_graph: GPU required for inference
+    if tool == 'fastsurfer':
+        device = getattr(args, 'device', 'auto')
+        if device != 'cpu':
+            script += f"#SBATCH --gres=gpu:{gpus}\n"
+    elif tool == 'meld_graph' and not getattr(args, 'no_gpu', False):
         script += f"#SBATCH --gres=gpu:{gpus}\n"
     
     script += f"""
@@ -989,6 +995,81 @@ apptainer exec \\
     --env SUBJECTS_DIR=/output \\
     {apptainer_img} \\
     recon-all -s "$PARTICIPANT" -i "/data/$PARTICIPANT/anat/"*"_T1w.nii.gz" -all
+"""
+    
+    elif tool == "fastsurfer":
+        version = getattr(args, 'version', 'v2.4.2')
+        fs_license = getattr(args, 'hpc_fs_license', None) or '$HOME/licenses/license.txt'
+        apptainer_img = f"{hpc_apptainer_dir}/deepmi.fastsurfer.{version}.sif"
+        output_dir = f"$HPC_DERIVATIVES/$DATASET-derivatives/fastsurfer_{version}"
+        
+        # Processing mode flags
+        seg_only = getattr(args, 'seg_only', False)
+        surf_only = getattr(args, 'surf_only', False)
+        
+        # Build FastSurfer options
+        fs_opts = []
+        
+        if seg_only:
+            fs_opts.append("--seg_only")
+        elif surf_only:
+            fs_opts.append("--surf_only")
+        
+        if getattr(args, 'three_tesla', False):
+            fs_opts.append("--3T")
+        
+        threads = getattr(args, 'threads', 4)
+        fs_opts.append(f"--threads {threads}")
+        
+        device = getattr(args, 'device', 'auto')
+        if device == 'cpu':
+            fs_opts.append("--device cpu")
+        elif device == 'cuda':
+            fs_opts.append("--device cuda")
+        # 'auto' is the default, no flag needed
+        
+        vox_size = getattr(args, 'vox_size', 'min')
+        fs_opts.append(f"--vox_size {vox_size}")
+        
+        if getattr(args, 'no_cereb', False):
+            fs_opts.append("--no_cereb")
+        if getattr(args, 'no_hypothal', False):
+            fs_opts.append("--no_hypothal")
+        if getattr(args, 'no_biasfield', False):
+            fs_opts.append("--no_biasfield")
+        
+        fs_opts_str = " \\\n    ".join(fs_opts) if fs_opts else ""
+        
+        # GPU support
+        gpu_flag = "--nv" if device != 'cpu' else ""
+        
+        script += f"""
+# FastSurfer setup
+FS_LICENSE="{fs_license}"
+OUTPUT_DIR="{output_dir}"
+mkdir -p "$OUTPUT_DIR"
+
+# Find T1w image for this participant
+T1W_FILE=$(find "$HPC_RAWDATA/$DATASET-rawdata/$PARTICIPANT" -name "*_T1w.nii.gz" | head -1)
+if [ -z "$T1W_FILE" ]; then
+    echo "ERROR: No T1w file found for $PARTICIPANT"
+    exit 1
+fi
+echo "Using T1w file: $T1W_FILE"
+
+# Run FastSurfer
+apptainer exec {gpu_flag} \\
+    -B "$HPC_RAWDATA/$DATASET-rawdata:/data:ro" \\
+    -B "$OUTPUT_DIR:/output" \\
+    -B "$FS_LICENSE:/opt/freesurfer/license.txt:ro" \\
+    --env FS_LICENSE=/opt/freesurfer/license.txt \\
+    {apptainer_img} \\
+    /fastsurfer/run_fastsurfer.sh \\
+    --sd /output \\
+    --sid $PARTICIPANT \\
+    --t1 "$T1W_FILE" \\
+    --fs_license /opt/freesurfer/license.txt \\
+    {fs_opts_str}
 """
     
     elif tool == "fmriprep":
