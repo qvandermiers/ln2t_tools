@@ -240,6 +240,7 @@ def get_hpc_image_build_command(
         "qsiprep": "pennlinc",
         "qsirecon": "pennlinc",
         "meld_graph": "meldproject",
+        "cvrmap": "ln2t",
     }
     tool_owner = tool_owners.get(tool, tool)
     
@@ -277,6 +278,7 @@ def get_tool_owner(tool: str) -> str:
         "qsiprep": "pennlinc",
         "qsirecon": "pennlinc",
         "meld_graph": "meldproject",
+        "cvrmap": "ln2t",
     }
     return tool_owners.get(tool, tool)
 

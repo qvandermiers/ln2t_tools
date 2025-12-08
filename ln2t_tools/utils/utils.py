@@ -239,6 +239,8 @@ def ensure_image_exists(
         tool_owner = "pennlinc"
     elif tool == "meld_graph":
         tool_owner = "meldproject"
+    elif tool == "cvrmap":
+        tool_owner = "ln2t"
     else:
         raise ValueError(f"Unsupported tool: {tool}")
     
@@ -691,6 +693,75 @@ def build_apptainer_cmd(tool: str, **options) -> str:
             except ValueError:
                 t2_container = str(t2_host)
             cmd_parts.append(f"--t2 {t2_container}")
+        
+        return " ".join(cmd_parts)
+    
+    elif tool == "cvrmap":
+        # CVRmap for cerebrovascular reactivity mapping
+        # Docker image: ln2t/cvrmap
+        # Documentation: https://github.com/arovai/cvrmap
+        # Requires fMRIPrep preprocessed data as input
+        
+        fmriprep_dir = options.get('fmriprep_dir', '')
+        if not fmriprep_dir:
+            raise ValueError("fmriprep_dir is required for CVRmap")
+        
+        task = options.get('task', '')
+        if not task:
+            raise ValueError("task is required for CVRmap")
+        
+        # Build base command
+        cmd_parts = [
+            f"apptainer run",
+            f"-B {options['rawdata']}:/data:ro",
+            f"-B {options['derivatives']}:/derivatives",
+            f"-B {fmriprep_dir}:/fmriprep:ro",
+            f"{options['apptainer_img']}",
+            f"/data /derivatives/{options['output_label']} participant",
+            f"--participant_label {options['participant_label']}",
+            f"--derivatives /fmriprep",
+            f"--task {task}",
+        ]
+        
+        # Add optional space specification
+        space = options.get('space', '')
+        if space:
+            cmd_parts.append(f"--space {space}")
+        
+        # Add baseline method
+        baseline_method = options.get('baseline_method', '')
+        if baseline_method:
+            cmd_parts.append(f"--baseline_method {baseline_method}")
+        
+        # Add ROI probe options
+        if options.get('roi_probe', False):
+            cmd_parts.append("--roi_probe")
+            
+            roi_coordinates = options.get('roi_coordinates', '')
+            if roi_coordinates:
+                cmd_parts.append(f"--roi_coordinates {roi_coordinates}")
+            
+            roi_radius = options.get('roi_radius', '')
+            if roi_radius:
+                cmd_parts.append(f"--roi_radius {roi_radius}")
+        
+        # Add parallelization options
+        n_jobs = options.get('n_jobs', 1)
+        if n_jobs and n_jobs != 1:
+            cmd_parts.append(f"--n_jobs {n_jobs}")
+        
+        # Add config file if provided
+        config = options.get('config', '')
+        if config:
+            config_path = Path(config)
+            # Bind config file directory and reference container path
+            cmd_parts.insert(-6, f"-B {config_path.parent}:/config:ro")
+            cmd_parts.append(f"--config /config/{config_path.name}")
+        
+        # Add any additional options
+        additional = options.get('additional_options', '')
+        if additional:
+            cmd_parts.append(additional)
         
         return " ".join(cmd_parts)
     

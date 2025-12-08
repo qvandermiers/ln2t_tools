@@ -1711,7 +1711,7 @@ def main(args=None) -> None:
 
                 # Process each tool for this dataset
                 for tool, version in tools_to_run.items():
-                    if tool not in ["freesurfer", "fastsurfer", "fmriprep", "qsiprep", "qsirecon", "meld_graph"]:
+                    if tool not in ["freesurfer", "fastsurfer", "fmriprep", "qsiprep", "qsirecon", "meld_graph", "cvrmap"]:
                         logger.warning(f"Unsupported tool {tool} for dataset {dataset}, skipping")
                         continue
                     
