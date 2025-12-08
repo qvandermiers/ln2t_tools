@@ -56,7 +56,7 @@ from ln2t_tools.utils.defaults import (
     DEFAULT_MELDGRAPH_VERSION,
     DEFAULT_MELD_FS_VERSION
 )
-from ln2t_tools.import_data import import_dicom, import_mrs, pre_import_mrs, import_physio
+from ln2t_tools.import_data import import_dicom, import_mrs, pre_import_mrs, import_physio, pre_import_physio
 from ln2t_tools.import_data.dicom import discover_participants_from_dicom_dir
 
 # Setup initial logging (will be reconfigured based on --verbosity)
@@ -257,11 +257,16 @@ def handle_import(args):
     if venv_path:
         venv_path = Path(venv_path).resolve()
     
-    # Handle --pre-import for MRS data
+    # Handle --pre-import for MRS or physio data
     if getattr(args, 'pre_import', False):
-        logger.info(f"\n{'='*60}")
-        logger.info("MRS PRE-IMPORT: Gathering P-files from scanner backup")
-        logger.info(f"{'='*60}")
+        datatype_arg = getattr(args, 'datatype', None)
+        
+        # Require explicit datatype for pre-import
+        if datatype_arg not in ['mrs', 'physio']:
+            logger.error("--pre-import requires --datatype to be 'mrs' or 'physio'")
+            logger.info("Example: ln2t_tools import --dataset DATASET --pre-import --datatype mrs")
+            logger.info("Example: ln2t_tools import --dataset DATASET --pre-import --datatype physio")
+            return
         
         # Auto-infer ds_initials from dataset name
         ds_initials = get_dataset_initials(dataset)
@@ -269,7 +274,6 @@ def handle_import(args):
             logger.error(f"Could not infer dataset initials from '{dataset}'")
             logger.error("Dataset name should follow pattern: YYYY-Name_Parts-hexhash")
             return
-        logger.info(f"Using dataset initials: {ds_initials}")
         
         # For pre-import, auto-discover participants from DICOM directory if not specified
         participant_labels = args.participant_label
@@ -289,35 +293,76 @@ def handle_import(args):
             
             logger.info(f"Discovered {len(participant_labels)} participants: {participant_labels}")
         
-        pre_import_success = pre_import_mrs(
-            dataset=dataset,
-            participant_labels=participant_labels,
-            sourcedata_dir=sourcedata_dir,
-            ds_initials=ds_initials,
-            session=getattr(args, 'session', None),
-            mrraw_dir=getattr(args, 'mrraw_dir', None),
-            tmp_dir=getattr(args, 'mrs_tmp_dir', None),
-            tolerance_hours=getattr(args, 'tolerance_hours', 1.0),
-            dry_run=getattr(args, 'dry_run', False)
-        )
-        
-        if pre_import_success:
-            logger.info("✓ MRS pre-import completed successfully")
-            
-            # Print sample command to run the actual import
+        if datatype_arg == 'mrs':
             logger.info(f"\n{'='*60}")
-            logger.info("To run the MRS BIDS conversion, use:")
+            logger.info("MRS PRE-IMPORT: Gathering P-files from scanner backup")
             logger.info(f"{'='*60}")
+            logger.info(f"Using dataset initials: {ds_initials}")
             
-            cmd_parts = ["ln2t_tools import"]
-            cmd_parts.append(f"--dataset {dataset}")
-            cmd_parts.append("--datatype mrs")
-            if getattr(args, 'session', None):
-                cmd_parts.append(f"--session {args.session}")
+            pre_import_success = pre_import_mrs(
+                dataset=dataset,
+                participant_labels=participant_labels,
+                sourcedata_dir=sourcedata_dir,
+                ds_initials=ds_initials,
+                session=getattr(args, 'session', None),
+                mrraw_dir=getattr(args, 'mrraw_dir', None),
+                tmp_dir=getattr(args, 'mrs_tmp_dir', None),
+                tolerance_hours=getattr(args, 'tolerance_hours', 1.0),
+                dry_run=getattr(args, 'dry_run', False)
+            )
             
-            logger.info(f"\n  {' '.join(cmd_parts)}\n")
-        else:
-            logger.error("✗ MRS pre-import failed")
+            if pre_import_success:
+                logger.info("✓ MRS pre-import completed successfully")
+                
+                # Print sample command to run the actual import
+                logger.info(f"\n{'='*60}")
+                logger.info("To run the MRS BIDS conversion, use:")
+                logger.info(f"{'='*60}")
+                
+                cmd_parts = ["ln2t_tools import"]
+                cmd_parts.append(f"--dataset {dataset}")
+                cmd_parts.append("--datatype mrs")
+                if getattr(args, 'session', None):
+                    cmd_parts.append(f"--session {args.session}")
+                
+                logger.info(f"\n  {' '.join(cmd_parts)}\n")
+            else:
+                logger.error("✗ MRS pre-import failed")
+        
+        elif datatype_arg == 'physio':
+            logger.info(f"\n{'='*60}")
+            logger.info("PHYSIO PRE-IMPORT: Gathering physio files from scanner backup")
+            logger.info(f"{'='*60}")
+            logger.info(f"Using dataset initials: {ds_initials}")
+            
+            pre_import_success = pre_import_physio(
+                dataset=dataset,
+                participant_labels=participant_labels,
+                sourcedata_dir=sourcedata_dir,
+                ds_initials=ds_initials,
+                session=getattr(args, 'session', None),
+                backup_dir=getattr(args, 'physio_backup_dir', None),
+                tolerance_hours=getattr(args, 'tolerance_hours', 1.0),
+                dry_run=getattr(args, 'dry_run', False)
+            )
+            
+            if pre_import_success:
+                logger.info("✓ Physio pre-import completed successfully")
+                
+                # Print sample command to run the actual import
+                logger.info(f"\n{'='*60}")
+                logger.info("To run the physio BIDS conversion, use:")
+                logger.info(f"{'='*60}")
+                
+                cmd_parts = ["ln2t_tools import"]
+                cmd_parts.append(f"--dataset {dataset}")
+                cmd_parts.append("--datatype physio")
+                if getattr(args, 'session', None):
+                    cmd_parts.append(f"--session {args.session}")
+                
+                logger.info(f"\n  {' '.join(cmd_parts)}\n")
+            else:
+                logger.error("✗ Physio pre-import failed")
         
         # Always exit after pre-import (don't automatically proceed with import)
         return

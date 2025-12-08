@@ -8,12 +8,17 @@ import subprocess
 import json
 import re
 import tarfile
+import shutil
+import os
 from pathlib import Path
 from typing import List, Optional, Dict, Tuple
 from datetime import datetime, timedelta
 import nibabel as nib
 
 logger = logging.getLogger(__name__)
+
+# Default path for scanner physio backup
+DEFAULT_PHYSIO_BACKUP_DIR = Path.home() / "PETMR/backup/auto/daily_backups/gating"
 
 
 def import_physio(
@@ -755,3 +760,281 @@ def compress_physio_source(physio_dir: Path, source_name: str) -> None:
         logger.info(f"✓ Created {compressed_file.name}")
     except Exception as e:
         logger.error(f"Failed to compress {source_name}: {e}")
+
+
+# =============================================================================
+# Pre-import functions: Gather physio files from scanner backup locations
+# =============================================================================
+
+def parse_physio_filename(filename: str) -> Optional[Dict]:
+    """Parse a physio filename to extract metadata including datetime.
+    
+    GE physio files have format: {SIGNAL}{TYPE}_{SEQUENCE}_{TIMESTAMP}
+    - SIGNAL: RESP (respiratory) or PPG (photoplethysmography)
+    - TYPE: Data or Trig (trigger)
+    - TIMESTAMP: End time of recording in format MMDDYYYYHH_MM_SS_MS
+    
+    Examples:
+    - RESPTrig_epi2_0621202109_35_43_785 → June 21, 2021, 09:35:43
+    - PPGTrig_epiRTphysio_1204202516_10_48_787 → Dec 4, 2025, 16:10:48
+    
+    Parameters
+    ----------
+    filename : str
+        Physio filename to parse
+        
+    Returns
+    -------
+    Optional[Dict]
+        Dictionary with parsed info, or None if parsing failed
+    """
+    # Pattern: RESPData_epiRTphysio_1124202515_54_58_279
+    # Format: {SIGNAL}{TYPE}_{SEQUENCE}_{MMDDYYYYHH_MM_SS_MS}
+    pattern = re.compile(r'^(RESP|PPG)(Data|Trig)_([^_]+)_(\d{10})_(\d+)_(\d+)_(\d+)$')
+    
+    match = pattern.match(filename)
+    if not match:
+        return None
+    
+    signal_type, data_type, sequence, datetime_str, minute, second, ms = match.groups()
+    
+    # Parse timestamp (end of recording)
+    # Format: MMDDYYYYHH_MM_SS_MS where datetime_str = MMDDYYYYHH
+    try:
+        month = int(datetime_str[:2])
+        day = int(datetime_str[2:4])
+        year = int(datetime_str[4:8])
+        hour = int(datetime_str[8:10])
+        
+        end_time = datetime(year, month, day, hour, int(minute), int(second))
+        
+        return {
+            'signal_type': signal_type,  # RESP or PPG
+            'data_type': data_type,      # Data or Trig
+            'sequence': sequence,
+            'end_time': end_time,
+            'milliseconds': int(ms)
+        }
+        
+    except ValueError as e:
+        logger.warning(f"Could not parse timestamp for {filename}: {e}")
+        return None
+
+
+def find_physio_files_by_datetime(
+    backup_dir: Path,
+    exam_datetime: datetime,
+    tolerance_hours: float = 1.0
+) -> List[Tuple[Path, Dict]]:
+    """Find physio files in backup directory matching exam datetime.
+    
+    Scans the backup directory for physio files and returns those whose
+    timestamp matches the exam datetime within the specified tolerance.
+    
+    Parameters
+    ----------
+    backup_dir : Path
+        Path to the physio backup directory
+    exam_datetime : datetime
+        The exam datetime from DICOM metadata
+    tolerance_hours : float
+        Time tolerance in hours for matching files
+        
+    Returns
+    -------
+    List[Tuple[Path, Dict]]
+        List of (file_path, parsed_info) tuples for matching files
+    """
+    if not backup_dir.exists():
+        logger.warning(f"Physio backup directory not found: {backup_dir}")
+        return []
+    
+    matching_files = []
+    tolerance = timedelta(hours=tolerance_hours)
+    
+    for item in backup_dir.iterdir():
+        if not item.is_file():
+            continue
+        
+        # Parse the filename
+        parsed = parse_physio_filename(item.name)
+        if parsed is None:
+            continue
+        
+        # Check if the physio end_time is within tolerance of exam_datetime
+        # Note: exam_datetime is the start of the scan, physio end_time is when recording ended
+        # We allow a window: exam_datetime - tolerance to exam_datetime + tolerance + ~30 min for scan duration
+        # Simplified: just check if they're on the same day with similar times
+        time_diff = abs((parsed['end_time'] - exam_datetime).total_seconds())
+        time_diff_hours = time_diff / 3600.0
+        
+        if time_diff_hours <= tolerance_hours:
+            matching_files.append((item, parsed))
+            logger.debug(f"Found matching physio file: {item.name} (diff: {time_diff_hours:.2f}h)")
+    
+    return matching_files
+
+
+def pre_import_physio(
+    dataset: str,
+    participant_labels: List[str],
+    sourcedata_dir: Path,
+    ds_initials: str,
+    session: Optional[str] = None,
+    backup_dir: Optional[Path] = None,
+    tolerance_hours: float = 1.0,
+    dry_run: bool = False
+) -> bool:
+    """Pre-import physio data: gather physio files from scanner backup location.
+    
+    This function:
+    1. For each participant, finds their DICOM data to extract exam metadata
+    2. Uses the exam datetime to find matching physio files in the backup directory
+    3. Copies all found physio files to {sourcedata_dir}/physio/{ds_initials}{participant}
+    
+    Parameters
+    ----------
+    dataset : str
+        Dataset name
+    participant_labels : List[str]
+        List of participant IDs (without 'sub-' prefix)
+    sourcedata_dir : Path
+        Path to sourcedata directory
+    ds_initials : str
+        Dataset initials prefix (e.g., 'CB', 'HP')
+    session : Optional[str]
+        Session label (without 'ses-' prefix)
+    backup_dir : Optional[Path]
+        Path to physio backup directory. Defaults to DEFAULT_PHYSIO_BACKUP_DIR
+    tolerance_hours : float
+        Time tolerance in hours for matching physio files by datetime
+    dry_run : bool
+        If True, only report what would be done without copying files
+        
+    Returns
+    -------
+    bool
+        True if pre-import successful for at least one participant
+    """
+    # Import DICOM metadata functions from mrs module (avoid duplication)
+    from ln2t_tools.import_data.mrs import get_dicom_metadata, find_dicom_for_participant
+    
+    # Set default path
+    if backup_dir is None:
+        backup_dir = DEFAULT_PHYSIO_BACKUP_DIR
+    
+    logger.info(f"{'[DRY RUN] ' if dry_run else ''}Physio Pre-import")
+    logger.info(f"  Dataset: {dataset}")
+    logger.info(f"  Participants: {participant_labels}")
+    logger.info(f"  Backup dir: {backup_dir}")
+    logger.info(f"  Tolerance: {tolerance_hours} hours")
+    
+    # Check backup directory exists
+    if not backup_dir.exists():
+        logger.error(f"Physio backup directory not found: {backup_dir}")
+        logger.error("Please verify the path or use --physio-backup-dir to specify a different location")
+        return False
+    
+    # Check DICOM source directory exists
+    dicom_dir = sourcedata_dir / "dicom"
+    if not dicom_dir.exists():
+        logger.error(f"DICOM directory not found: {dicom_dir}")
+        logger.error("Cannot extract exam metadata without DICOM files")
+        return False
+    
+    # Create physio directory in sourcedata
+    physio_output_dir = sourcedata_dir / "physio"
+    if not dry_run:
+        physio_output_dir.mkdir(parents=True, exist_ok=True)
+    
+    success_count = 0
+    failed_participants = []
+    
+    for participant in participant_labels:
+        participant_id = participant.replace('sub-', '')
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Processing participant: {participant_id}")
+        logger.info(f"{'='*60}")
+        
+        # Step 1: Find DICOM file and extract metadata
+        dicom_file = find_dicom_for_participant(
+            dicom_dir, participant_id, ds_initials, session
+        )
+        
+        if dicom_file is None:
+            logger.error(f"Could not find DICOM for {participant_id}")
+            failed_participants.append(participant_id)
+            continue
+        
+        metadata = get_dicom_metadata(dicom_file)
+        
+        logger.info(f"  DICOM metadata:")
+        logger.info(f"    Exam Date: {metadata['exam_date']}")
+        logger.info(f"    Exam Time: {metadata['exam_time']}")
+        logger.info(f"    Patient ID: {metadata['patient_id']}")
+        
+        if metadata['exam_datetime'] is None:
+            logger.error(f"Could not extract exam datetime for {participant_id}")
+            failed_participants.append(participant_id)
+            continue
+        
+        logger.info(f"    Exam DateTime: {metadata['exam_datetime']}")
+        
+        # Step 2: Find matching physio files from backup
+        matching_files = find_physio_files_by_datetime(
+            backup_dir, metadata['exam_datetime'], tolerance_hours
+        )
+        
+        if not matching_files:
+            logger.warning(f"No physio files found for {participant_id}")
+            failed_participants.append(participant_id)
+            continue
+        
+        logger.info(f"  Found {len(matching_files)} physio file(s):")
+        for filepath, parsed in matching_files:
+            time_diff = abs((parsed['end_time'] - metadata['exam_datetime']).total_seconds()) / 60
+            logger.info(f"    - {filepath.name} ({parsed['signal_type']}{parsed['data_type']}, {time_diff:.1f} min diff)")
+        
+        # Step 3: Copy physio files to sourcedata/physio
+        if session:
+            output_dir = physio_output_dir / f"{ds_initials}{participant_id}SES{session}"
+        else:
+            output_dir = physio_output_dir / f"{ds_initials}{participant_id}"
+        
+        if dry_run:
+            logger.info(f"  [DRY RUN] Would copy {len(matching_files)} file(s) to {output_dir}")
+        else:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            copied_count = 0
+            for filepath, parsed in matching_files:
+                dest = output_dir / filepath.name
+                if dest.exists():
+                    logger.info(f"  File already exists, skipping: {filepath.name}")
+                    copied_count += 1
+                    continue
+                
+                try:
+                    shutil.copy2(filepath, dest)
+                    logger.info(f"  ✓ Copied: {filepath.name}")
+                    copied_count += 1
+                except Exception as e:
+                    logger.error(f"  ✗ Failed to copy {filepath.name}: {e}")
+            
+            if copied_count > 0:
+                logger.info(f"  ✓ Copied {copied_count} file(s) for {participant_id}")
+                success_count += 1
+            else:
+                logger.error(f"  ✗ Failed to copy any files for {participant_id}")
+                failed_participants.append(participant_id)
+    
+    # Summary
+    logger.info(f"\n{'='*60}")
+    logger.info(f"Physio Pre-import Summary:")
+    logger.info(f"  Successful: {success_count}/{len(participant_labels)}")
+    if failed_participants:
+        logger.info(f"  Failed: {', '.join(failed_participants)}")
+    logger.info(f"{'='*60}\n")
+    
+    return success_count > 0
+

@@ -333,27 +333,33 @@ by administrators in the rawdata directory.
         action="store_true",
         help="Keep temporary files created by dcm2bids (tmp_dcm2bids directory in rawdata)"
     )
-    # MRS pre-import options
+    # Pre-import options (for MRS and physio data)
     parser_import.add_argument(
         "--pre-import",
         action="store_true",
-        help="Run pre-import step for MRS: gather P-files from scanner backup locations"
+        help="Run pre-import step: gather source files from scanner backup locations. "
+             "Use with --datatype mrs or --datatype physio to specify which data to pre-import."
     )
     parser_import.add_argument(
         "--mrraw-dir",
         type=Path,
-        help="Path to scanner mrraw directory (default: /home/ln2t-worker/PETMR/backup/auto/daily_backups/mrraw)"
+        help="Path to scanner mrraw directory for MRS (default: /home/ln2t-worker/PETMR/backup/auto/daily_backups/mrraw)"
     )
     parser_import.add_argument(
         "--mrs-tmp-dir",
         type=Path,
-        help="Path to scanner tmp directory with exam folders (default: /home/ln2t-worker/PETMR/backup/auto/daily_backups/tmp)"
+        help="Path to scanner tmp directory with exam folders for MRS (default: /home/ln2t-worker/PETMR/backup/auto/daily_backups/tmp)"
+    )
+    parser_import.add_argument(
+        "--physio-backup-dir",
+        type=Path,
+        help="Path to physio backup directory (default: $HOME/PETMR/backup/auto/daily_backups/gating)"
     )
     parser_import.add_argument(
         "--tolerance-hours",
         type=float,
         default=1.0,
-        help="Time tolerance in hours for matching P-files by datetime (default: 1.0)"
+        help="Time tolerance in hours for matching source files by datetime (default: 1.0)"
     )
     parser_import.add_argument(
         "--dry-run",
