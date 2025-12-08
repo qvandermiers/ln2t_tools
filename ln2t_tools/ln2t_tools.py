@@ -32,6 +32,7 @@ from ln2t_tools.utils.demographics import (
     create_meld_demographics_from_participants,
     validate_meld_demographics
 )
+from ln2t_tools.tools.cvrmap import CvrMapTool
 from ln2t_tools.utils.hpc import (
     submit_hpc_job,
     submit_multiple_jobs,
@@ -1910,6 +1911,15 @@ def main(args=None) -> None:
                                         dataset_rawdata=dataset_rawdata,
                                         dataset_derivatives=dataset_derivatives,
                                         dataset_code=dataset_code,
+                                        apptainer_img=apptainer_img
+                                    )
+                                elif tool == "cvrmap":
+                                    CvrMapTool.process_subject(
+                                        layout=layout,
+                                        participant_label=participant_label,
+                                        args=args,
+                                        dataset_rawdata=dataset_rawdata,
+                                        dataset_derivatives=dataset_derivatives,
                                         apptainer_img=apptainer_img
                                     )
                                 log_minimal(logger, f"✓ Successfully processed participant {participant_label} with {tool}")
