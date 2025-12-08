@@ -707,6 +707,8 @@ def build_apptainer_cmd(tool: str, **options) -> str:
             raise ValueError("fmriprep_dir is required for CVRmap")
         
         # Build base command
+        # CVRmap expects --derivatives in format: fmriprep=/path/to/fmriprep
+        # We bind fmriprep_dir to /fmriprep in the container
         cmd_parts = [
             f"apptainer run",
             f"-B {options['rawdata']}:/data:ro",
@@ -715,7 +717,7 @@ def build_apptainer_cmd(tool: str, **options) -> str:
             f"{options['apptainer_img']}",
             f"/data /derivatives/{options['output_label']} participant",
             f"--participant-label {options['participant_label']}",
-            f"--derivatives /fmriprep",
+            f"--derivatives fmriprep=/fmriprep",
         ]
         
         # Add task if specified (CVRmap auto-discovers if not provided)
