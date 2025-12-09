@@ -881,6 +881,27 @@ def check_required_data(tool: str, dataset: str, participant_label: str, args: A
         else:
             logger.info(f"  [sub-{participant_label}] ✓ QSIPrep outputs found on HPC")
     
+    # Check for fMRIPrep outputs if running CVRmap
+    if tool == 'cvrmap':
+        from ln2t_tools.utils.defaults import DEFAULT_CVRMAP_FMRIPREP_VERSION
+        fmriprep_version = getattr(args, 'fmriprep_version', DEFAULT_CVRMAP_FMRIPREP_VERSION)
+        fmriprep_path = f"{hpc_derivatives_check}/{dataset}-derivatives/fmriprep_{fmriprep_version}"
+        
+        logger.info(f"  [sub-{participant_label}] Checking fMRIPrep outputs on HPC: {fmriprep_path}")
+        
+        if not check_remote_path_exists(username, hostname, keyfile, gateway, fmriprep_path):
+            logger.warning(f"[sub-{participant_label}] Required fMRIPrep outputs not found on HPC: {fmriprep_path}")
+            local_fmriprep = Path.home() / "derivatives" / f"{dataset}-derivatives" / f"fmriprep_{fmriprep_version}"
+            if local_fmriprep.exists():
+                if not prompt_upload_data(str(local_fmriprep), fmriprep_path, username, hostname, keyfile, gateway, participant_label):
+                    return False
+            else:
+                print(f"\n✗ [sub-{participant_label}] fMRIPrep outputs not found locally at {local_fmriprep}")
+                print(f"   Cannot run CVRmap without fMRIPrep outputs on HPC")
+                return False
+        else:
+            logger.info(f"  [sub-{participant_label}] ✓ fMRIPrep outputs found on HPC")
+    
     return True
 
 
@@ -1242,6 +1263,66 @@ apptainer exec {gpu_flag} \\
     {fs_subjects_dir_bind} \\
     {apptainer_img} \\
     /bin/bash -c 'cd /app && {python_cmd}'
+"""
+    
+    elif tool == "cvrmap":
+        # CVRmap for cerebrovascular reactivity mapping
+        # Requires fMRIPrep preprocessed data
+        from ln2t_tools.utils.defaults import DEFAULT_CVRMAP_FMRIPREP_VERSION
+        
+        version = getattr(args, 'version', '4.3.0')
+        fmriprep_version = getattr(args, 'fmriprep_version', DEFAULT_CVRMAP_FMRIPREP_VERSION)
+        apptainer_img = f"{hpc_apptainer_dir}/ln2t.cvrmap.{version}.sif"
+        output_dir = f"$HPC_DERIVATIVES/$DATASET-derivatives/cvrmap_{version}"
+        fmriprep_dir = f"$HPC_DERIVATIVES/$DATASET-derivatives/fmriprep_{fmriprep_version}"
+        
+        # Build optional arguments
+        task_opt = ""
+        task = getattr(args, 'task', None)
+        if task:
+            task_opt = f"--task {task}"
+        
+        space_opt = ""
+        space = getattr(args, 'space', None)
+        if space:
+            space_opt = f"--space {space}"
+        
+        baseline_method_opt = ""
+        baseline_method = getattr(args, 'baseline_method', None)
+        if baseline_method:
+            baseline_method_opt = f"--baseline-method {baseline_method}"
+        
+        roi_opts = ""
+        if getattr(args, 'roi_probe', False):
+            roi_opts = "--roi-probe"
+            roi_coordinates = getattr(args, 'roi_coordinates', None)
+            if roi_coordinates:
+                roi_opts += f" --roi-coordinates {roi_coordinates}"
+            roi_radius = getattr(args, 'roi_radius', None)
+            if roi_radius:
+                roi_opts += f" --roi-radius {roi_radius}"
+        
+        n_jobs_opt = ""
+        n_jobs = getattr(args, 'n_jobs', None)
+        if n_jobs and n_jobs != 1:
+            n_jobs_opt = f"--n-jobs {n_jobs}"
+        
+        script += f"""
+# CVRmap setup
+OUTPUT_DIR="{output_dir}"
+FMRIPREP_DIR="{fmriprep_dir}"
+mkdir -p "$OUTPUT_DIR"
+
+# Run CVRmap
+apptainer run \\
+    -B "$HPC_RAWDATA/$DATASET-rawdata:/data:ro" \\
+    -B "$OUTPUT_DIR:/derivatives" \\
+    -B "$FMRIPREP_DIR:/fmriprep:ro" \\
+    {apptainer_img} \\
+    /data /derivatives participant \\
+    --participant-label {participant_label} \\
+    --derivatives fmriprep=/fmriprep \\
+    {task_opt} {space_opt} {baseline_method_opt} {roi_opts} {n_jobs_opt}
 """
     
     else:
