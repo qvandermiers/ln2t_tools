@@ -1739,15 +1739,14 @@ def main(args=None) -> None:
                         # If submitting to HPC, do not build a local image; instead
                         # ensure the required image exists on the HPC apptainer directory.
                         if getattr(args, 'hpc', False):
+                            # Validate HPC configuration and set defaults (must be done first)
+                            validate_hpc_config(args)
+                            
                             username = args.hpc_username
                             hostname = args.hpc_hostname
                             keyfile = args.hpc_keyfile
                             gateway = getattr(args, 'hpc_gateway', None)
-                            hpc_apptainer_dir = getattr(args, 'hpc_apptainer_dir', None)
-
-                            # Default to $GLOBALSCRATCH/apptainer if not provided
-                            if not hpc_apptainer_dir:
-                                hpc_apptainer_dir = "$GLOBALSCRATCH/apptainer"
+                            hpc_apptainer_dir = args.hpc_apptainer_dir  # Default set in validate_hpc_config
 
                             # Establish SSH ControlMaster for connection reuse (avoids rate limiting)
                             if not test_ssh_connection(username, hostname, keyfile, gateway):
@@ -1789,16 +1788,13 @@ def main(args=None) -> None:
                         if getattr(args, 'hpc', False):
                             log_minimal(logger, f"Submitting {tool} jobs to HPC for {len(participant_list)} participants...")
                             
-                            # Validate HPC configuration
-                            validate_hpc_config(args)
-                            
-                            # Get HPC connection parameters
+                            # Get HPC connection parameters (already validated earlier)
                             username = args.hpc_username
                             hostname = args.hpc_hostname
                             keyfile = args.hpc_keyfile
                             gateway = getattr(args, 'hpc_gateway', None)
-                            hpc_rawdata = getattr(args, 'hpc_rawdata', '$GLOBALSCRATCH/rawdata')
-                            hpc_derivatives = getattr(args, 'hpc_derivatives', '$GLOBALSCRATCH/derivatives')
+                            hpc_rawdata = getattr(args, 'hpc_rawdata', None) or '$GLOBALSCRATCH/rawdata'
+                            hpc_derivatives = getattr(args, 'hpc_derivatives', None) or '$GLOBALSCRATCH/derivatives'
                             
                             # Check required data on HPC for each participant
                             all_data_ready = True

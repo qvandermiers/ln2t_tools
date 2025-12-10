@@ -414,7 +414,7 @@ def prompt_apptainer_build(
     hostname = args.hpc_hostname
     keyfile = args.hpc_keyfile
     gateway = getattr(args, 'hpc_gateway', None)
-    hpc_apptainer_dir = args.hpc_apptainer_dir
+    hpc_apptainer_dir = getattr(args, 'hpc_apptainer_dir', None) or "$GLOBALSCRATCH/apptainer"
     
     tool_owner = get_tool_owner(tool)
     image_name = f"{tool_owner}.{tool}.{version}.sif"
@@ -668,13 +668,16 @@ def get_scp_command(username: str, hostname: str, keyfile: str, gateway: Optiona
 
 
 def validate_hpc_config(args) -> None:
-    """Validate HPC configuration arguments."""
+    """Validate HPC configuration arguments and set defaults."""
     if args.hpc:
+        # Set default for hpc_apptainer_dir if not provided
+        if not getattr(args, 'hpc_apptainer_dir', None):
+            args.hpc_apptainer_dir = "$GLOBALSCRATCH/apptainer"
+        
         required_args = {
             '--hpc-username': args.hpc_username,
             '--hpc-hostname': args.hpc_hostname,
             '--hpc-keyfile': args.hpc_keyfile,
-            '--hpc-apptainer-dir': args.hpc_apptainer_dir,
         }
         
         missing = [arg for arg, value in required_args.items() if not value]
@@ -682,9 +685,9 @@ def validate_hpc_config(args) -> None:
             raise ValueError(
                 f"When using --hpc, you must provide: {', '.join(missing)}\n"
                 f"Example: --hpc-username arovai --hpc-hostname lyra.ulb.ac.be "
-                f"--hpc-keyfile ~/.ssh/id_rsa --hpc-apptainer-dir /path/on/hpc/apptainer\n"
-                f"Note: --hpc-rawdata and --hpc-derivatives are optional "
-                f"(default: $GLOBALSCRATCH/rawdata and $GLOBALSCRATCH/derivatives on cluster)"
+                f"--hpc-keyfile ~/.ssh/id_rsa\n"
+                f"Note: --hpc-apptainer-dir, --hpc-rawdata, and --hpc-derivatives are optional "
+                f"(defaults: $GLOBALSCRATCH/apptainer, $GLOBALSCRATCH/rawdata, $GLOBALSCRATCH/derivatives on cluster)"
             )
 
 
