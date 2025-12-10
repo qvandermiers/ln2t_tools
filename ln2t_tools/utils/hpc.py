@@ -208,9 +208,10 @@ def check_apptainer_image_exists_on_hpc(
 
     # Image filename uses the version/token as provided (allow full tags like 'cuda-v2.4.2')
     image_name = f"{tool_owner}.{tool}.{version}.sif"
-    remote_path = Path(hpc_apptainer_dir) / image_name
+    remote_path = f"{hpc_apptainer_dir}/{image_name}"
 
-    ssh_cmd = get_ssh_command(username, hostname, keyfile, gateway) + [f"test -e {remote_path}"]
+    # Use login shell to expand environment variables like $GLOBALSCRATCH
+    ssh_cmd = get_ssh_command(username, hostname, keyfile, gateway) + [f"bash -l -c 'test -e {remote_path}'"]
 
     try:
         logger.info(f"Checking for Apptainer image on HPC: {username}@{hostname}:{remote_path}")
@@ -463,9 +464,16 @@ def prompt_apptainer_build(
         print("This may take a while depending on the image size and network speed...")
         
         try:
-            # Create remote directory if it doesn't exist
-            ssh_cmd = get_ssh_command(username, hostname, keyfile, gateway) + [f"mkdir -p {hpc_apptainer_dir}"]
+            # Create remote directory if it doesn't exist (use login shell for env var expansion)
+            ssh_cmd = get_ssh_command(username, hostname, keyfile, gateway) + [f"bash -l -c 'mkdir -p {hpc_apptainer_dir}'"]
             subprocess.run(ssh_cmd, check=True, capture_output=True)
+            
+            # Resolve remote path for scp (need to expand $GLOBALSCRATCH)
+            if hpc_apptainer_dir.startswith('$'):
+                resolve_cmd = get_ssh_command(username, hostname, keyfile, gateway) + [f"bash -l -c 'echo {remote_path}'"]
+                result = subprocess.run(resolve_cmd, capture_output=True, text=True, timeout=30)
+                if result.returncode == 0 and result.stdout.strip():
+                    remote_path = result.stdout.strip().split('\n')[-1]
             
             # Push the image using scp
             scp_cmd = get_scp_command(username, hostname, keyfile, gateway) + [

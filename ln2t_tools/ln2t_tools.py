@@ -1745,10 +1745,9 @@ def main(args=None) -> None:
                             gateway = getattr(args, 'hpc_gateway', None)
                             hpc_apptainer_dir = getattr(args, 'hpc_apptainer_dir', None)
 
+                            # Default to $GLOBALSCRATCH/apptainer if not provided
                             if not hpc_apptainer_dir:
-                                logger.error("HPC apptainer directory not configured (hpc-apptainer-dir)")
-                                dataset_success = False
-                                continue
+                                hpc_apptainer_dir = "$GLOBALSCRATCH/apptainer"
 
                             # Establish SSH ControlMaster for connection reuse (avoids rate limiting)
                             if not test_ssh_connection(username, hostname, keyfile, gateway):

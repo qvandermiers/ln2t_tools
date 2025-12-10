@@ -175,7 +175,7 @@ def add_hpc_arguments(parser):
     parser.add_argument(
         "--hpc-apptainer-dir",
         type=str,
-        help="Path to apptainer images directory on HPC (required if --hpc is used)"
+        help="Path to apptainer images directory on HPC (default: $GLOBALSCRATCH/apptainer on cluster)"
     )
     parser.add_argument(
         "--hpc-fs-license",
