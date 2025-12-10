@@ -1465,8 +1465,8 @@ def submit_hpc_job(
         return None
     
     # Check required data exists on HPC
-    hpc_rawdata = getattr(args, 'hpc_rawdata', None)
-    hpc_derivatives = getattr(args, 'hpc_derivatives', None)
+    hpc_rawdata = getattr(args, 'hpc_rawdata', None) or None
+    hpc_derivatives = getattr(args, 'hpc_derivatives', None) or None
     
     if not check_required_data(tool, dataset, participant_label, args, username, hostname, 
                                keyfile, gateway, hpc_rawdata, hpc_derivatives):
@@ -1606,7 +1606,7 @@ def print_download_command(tool: str, dataset: str, args: Any, job_ids: List[str
     hostname = args.hpc_hostname
     keyfile = args.hpc_keyfile
     gateway = getattr(args, 'hpc_gateway', None)
-    hpc_derivatives = getattr(args, 'hpc_derivatives', '$GLOBALSCRATCH/derivatives')
+    hpc_derivatives = getattr(args, 'hpc_derivatives', None) or '$GLOBALSCRATCH/derivatives'
     
     # Determine version and output directory
     version = getattr(args, 'version', {
