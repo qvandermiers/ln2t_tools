@@ -200,6 +200,8 @@ def check_apptainer_image_exists_on_hpc(
         tool_owner = "pennlinc"
     elif tool == "meld_graph":
         tool_owner = "meldproject"
+    elif tool == "cvrmap":
+        tool_owner = "ln2t"
     else:
         logger.error(f"Unknown tool when checking HPC image: {tool}")
         return False
