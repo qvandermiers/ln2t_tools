@@ -174,6 +174,56 @@ def get_ssh_command(username: str, hostname: str, keyfile: str, gateway: Optiona
     return cmd
 
 
+def resolve_hpc_env_var(
+    var_path: str,
+    username: str,
+    hostname: str,
+    keyfile: str,
+    gateway: Optional[str] = None
+) -> str:
+    """Resolve environment variable path on HPC to its actual value.
+    
+    Parameters
+    ----------
+    var_path : str
+        Path that may contain environment variables (e.g., '$GLOBALSCRATCH/rawdata')
+    username : str
+        HPC username
+    hostname : str
+        HPC hostname
+    keyfile : str
+        SSH keyfile path
+    gateway : Optional[str]
+        ProxyJump gateway
+        
+    Returns
+    -------
+    str
+        Resolved path with environment variables expanded
+    """
+    if not var_path or '$' not in var_path:
+        return var_path
+    
+    # Use login shell to resolve environment variables
+    ssh_cmd = get_ssh_command(username, hostname, keyfile, gateway) + [
+        f"bash -l -c 'echo {var_path}'"
+    ]
+    
+    try:
+        result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0 and result.stdout.strip():
+            # Take last line to skip shell init output
+            resolved = result.stdout.strip().split('\n')[-1]
+            if resolved and not resolved.startswith('$'):
+                logger.debug(f"Resolved '{var_path}' to '{resolved}'")
+                return resolved
+    except Exception as e:
+        logger.warning(f"Failed to resolve HPC path '{var_path}': {e}")
+    
+    # Return original if resolution failed
+    return var_path
+
+
 def check_apptainer_image_exists_on_hpc(
     username: str,
     hostname: str,
@@ -1034,10 +1084,13 @@ def generate_hpc_script(
     else:
         job_name = f"{tool}-{dataset}-{participant_label}"
     
-    # Use $GLOBALSCRATCH if paths not provided
+    # Paths should be resolved by caller - these are fallbacks
+    # Note: These should be actual paths, not $GLOBALSCRATCH which isn't available in SLURM jobs
     if not hpc_rawdata:
+        logger.warning("hpc_rawdata not provided to generate_hpc_script - using $GLOBALSCRATCH fallback")
         hpc_rawdata = "$GLOBALSCRATCH/rawdata"
     if not hpc_derivatives:
+        logger.warning("hpc_derivatives not provided to generate_hpc_script - using $GLOBALSCRATCH fallback")
         hpc_derivatives = "$GLOBALSCRATCH/derivatives"
     
     # Get partition and resource settings
@@ -1464,16 +1517,24 @@ def submit_hpc_job(
         logger.error("Cannot connect to HPC. Please check SSH configuration.")
         return None
     
-    # Check required data exists on HPC
-    hpc_rawdata = getattr(args, 'hpc_rawdata', None) or None
-    hpc_derivatives = getattr(args, 'hpc_derivatives', None) or None
+    # Get HPC paths and resolve environment variables
+    # SLURM batch jobs don't have access to login shell environment variables like $GLOBALSCRATCH,
+    # so we resolve them now to their actual paths
+    hpc_rawdata = getattr(args, 'hpc_rawdata', None) or '$GLOBALSCRATCH/rawdata'
+    hpc_derivatives = getattr(args, 'hpc_derivatives', None) or '$GLOBALSCRATCH/derivatives'
+    hpc_apptainer_dir = args.hpc_apptainer_dir or '$GLOBALSCRATCH/apptainer'
+    
+    # Resolve environment variables to actual paths
+    hpc_rawdata = resolve_hpc_env_var(hpc_rawdata, username, hostname, keyfile, gateway)
+    hpc_derivatives = resolve_hpc_env_var(hpc_derivatives, username, hostname, keyfile, gateway)
+    hpc_apptainer_dir = resolve_hpc_env_var(hpc_apptainer_dir, username, hostname, keyfile, gateway)
     
     if not check_required_data(tool, dataset, participant_label, args, username, hostname, 
                                keyfile, gateway, hpc_rawdata, hpc_derivatives):
         logger.error("Required data not available on HPC. Job submission cancelled.")
         return None
     
-    # Generate HPC script
+    # Generate HPC script with resolved paths
     script_content = generate_hpc_script(
         tool=tool,
         participant_label=participant_label,
@@ -1481,7 +1542,7 @@ def submit_hpc_job(
         args=args,
         hpc_rawdata=hpc_rawdata,
         hpc_derivatives=hpc_derivatives,
-        hpc_apptainer_dir=args.hpc_apptainer_dir
+        hpc_apptainer_dir=hpc_apptainer_dir
     )
     
     # Create temporary script file
