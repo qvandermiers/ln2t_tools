@@ -70,82 +70,44 @@ Typical runtime: ~1-1.5 hours (full), ~5 min (seg-only) on GPU
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
         """Add FastSurfer-specific CLI arguments.
         
+        NOTE: Tool-specific arguments are now passed via --tool-args.
+        This method is kept for compatibility but adds no arguments.
+        
+        FastSurfer accepts the following arguments via --tool-args:
+        
+        Processing modes:
+          --seg-only          Segmentation only (skip surface recon)
+          --surf-only         Surface reconstruction only
+          
+        Hardware options:
+          --threads N         Number of threads (default: 4)
+          --device DEVICE     Device for inference: auto, cpu, cuda, mps
+          --vox-size SIZE     Voxel size: 'min' or 0.7-1.0 (default: min)
+          
+        Atlas options:
+          --3T                Use 3T atlas for Talairach registration
+          
+        Segmentation options:
+          --no-cereb          Skip cerebellum sub-segmentation
+          --no-hypothal       Skip hypothalamus sub-segmentation  
+          --no-biasfield      Skip bias field correction
+          
+        Additional inputs:
+          --t2 PATH           T2w image for hypothalamus segmentation
+        
         Parameters
         ----------
         parser : argparse.ArgumentParser
             The subparser for this tool
         """
-        parser.add_argument(
-            "--seg-only",
-            action="store_true",
-            default=False,
-            help="Run segmentation only (skip surface reconstruction). "
-                 "Fast mode (~5 min on GPU), outputs volumetric segmentations only."
-        )
-        parser.add_argument(
-            "--surf-only",
-            action="store_true",
-            default=False,
-            help="Run surface reconstruction only (requires prior segmentation). "
-                 "Use when segmentation already exists."
-        )
-        parser.add_argument(
-            "--3T",
-            action="store_true",
-            dest="three_tesla",
-            default=False,
-            help="Use 3T atlas for Talairach registration. "
-                 "Provides better ICV estimates for 3T scanner data."
-        )
-        parser.add_argument(
-            "--threads",
-            type=int,
-            default=4,
-            help="Number of threads to use (default: 4). "
-                 "If >1 for surface reconstruction, hemispheres are processed in parallel."
-        )
-        parser.add_argument(
-            "--device",
-            choices=["auto", "cpu", "cuda", "mps"],
-            default="auto",
-            help="Device for neural network inference (default: auto). "
-                 "'cuda' for NVIDIA GPU, 'mps' for Apple Silicon, 'cpu' for CPU-only."
-        )
-        parser.add_argument(
-            "--vox-size",
-            type=str,
-            default="min",
-            help="Target voxel size: 'min' (auto from input), or value 0.7-1.0 (default: min). "
-                 "Values <1mm enable high-resolution processing."
-        )
-        parser.add_argument(
-            "--no-cereb",
-            action="store_true",
-            default=False,
-            help="Skip cerebellum sub-segmentation (CerebNet)."
-        )
-        parser.add_argument(
-            "--no-hypothal",
-            action="store_true",
-            default=False,
-            help="Skip hypothalamus sub-segmentation (HypVINN)."
-        )
-        parser.add_argument(
-            "--no-biasfield",
-            action="store_true",
-            default=False,
-            help="Skip bias field correction and partial volume-corrected statistics."
-        )
-        parser.add_argument(
-            "--t2",
-            type=Path,
-            default=None,
-            help="Path to T2w image for improved hypothalamus segmentation (optional)."
-        )
+        pass  # Tool-specific args now passed via --tool-args
     
     @classmethod
     def validate_args(cls, args: argparse.Namespace) -> bool:
         """Validate FastSurfer arguments.
+        
+        With the --tool-args pattern, validation is handled by the container.
+        This method simply returns True.
         
         Parameters
         ----------
@@ -155,24 +117,8 @@ Typical runtime: ~1-1.5 hours (full), ~5 min (seg-only) on GPU
         Returns
         -------
         bool
-            True if arguments are valid
+            True (container handles validation)
         """
-        # Check for conflicting options
-        if getattr(args, 'seg_only', False) and getattr(args, 'surf_only', False):
-            logger.error("Cannot use --seg-only and --surf-only together")
-            return False
-        
-        # Validate vox_size
-        vox_size = getattr(args, 'vox_size', 'min')
-        if vox_size != 'min':
-            try:
-                vox_val = float(vox_size)
-                if vox_val < 0.7 or vox_val > 1.0:
-                    logger.warning(f"Voxel size {vox_val}mm is outside recommended range (0.7-1.0mm)")
-            except ValueError:
-                logger.error(f"Invalid vox_size value: {vox_size}")
-                return False
-        
         return True
     
     @classmethod
@@ -311,15 +257,12 @@ Typical runtime: ~1-1.5 hours (full), ~5 min (seg-only) on GPU
         version = args.version or cls.default_version
         output_label = args.output_label or f"fastsurfer_{version}"
         
-        # Log processing mode
-        seg_only = getattr(args, 'seg_only', False)
-        surf_only = getattr(args, 'surf_only', False)
-        
-        if seg_only:
+        # Log processing info
+        tool_args = getattr(args, 'tool_args', '') or ''
+        if '--seg-only' in tool_args:
             logger.info("Running FastSurfer in segmentation-only mode (~5 min on GPU)")
             logger.info("  Surface reconstruction will be skipped")
-            logger.info("  Outputs: volumetric segmentations, parcellations, and statistics")
-        elif surf_only:
+        elif '--surf-only' in tool_args:
             logger.info("Running FastSurfer in surface-only mode")
             logger.info("  Requires prior segmentation to exist")
         else:
@@ -327,12 +270,7 @@ Typical runtime: ~1-1.5 hours (full), ~5 min (seg-only) on GPU
             logger.info("  Segmentation: ~5 min on GPU")
             logger.info("  Surface reconstruction: ~60-90 min")
         
-        # Log device info
-        device = getattr(args, 'device', 'auto')
-        if device == 'cpu':
-            logger.warning("CPU mode selected - processing will be significantly slower")
-        
-        # Build command using utility function
+        # Build command using utility function with tool_args pass-through
         cmd = build_apptainer_cmd(
             tool="fastsurfer",
             fs_license=args.fs_license,
@@ -344,16 +282,7 @@ Typical runtime: ~1-1.5 hours (full), ~5 min (seg-only) on GPU
             output_label=output_label,
             session=session,
             run=run,
-            seg_only=seg_only,
-            surf_only=surf_only,
-            three_tesla=getattr(args, 'three_tesla', False),
-            threads=getattr(args, 'threads', 4),
-            device=device,
-            vox_size=getattr(args, 'vox_size', 'min'),
-            no_cereb=getattr(args, 'no_cereb', False),
-            no_hypothal=getattr(args, 'no_hypothal', False),
-            no_biasfield=getattr(args, 'no_biasfield', False),
-            t2=getattr(args, 't2', None),
+            tool_args=tool_args
         )
         
         return [cmd] if isinstance(cmd, str) else cmd

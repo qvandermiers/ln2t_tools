@@ -54,45 +54,25 @@ Typical runtime: 4-8 hours per subject
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
         """Add QSIPrep-specific CLI arguments.
         
-        Parameters
-        ----------
-        parser : argparse.ArgumentParser
-            The subparser for this tool
+        Tool-specific options should be passed via --tool-args.
+        This method is kept for backward compatibility but adds no arguments.
+        
+        Example usage with --tool-args:
+            ln2t_tools qsiprep --dataset MYDATA --participant-label 001 \\
+                --tool-args "--output-resolution 2.0 --denoise-method dwidenoise"
+                
+        Common QSIPrep options (pass via --tool-args):
+            --output-resolution <mm>   : Isotropic voxel size for output (REQUIRED)
+            --denoise-method <method>  : dwidenoise, patch2self, or none
+            --dwi-only                 : Process only DWI data
+            --anat-only                : Process only anatomical data
+            --nprocs <n>               : Number of processes
+            --omp-nthreads <n>         : Number of OpenMP threads
+            
+        NOTE: --output-resolution is required by QSIPrep and must be included
+        in --tool-args.
         """
-        parser.add_argument(
-            "--output-resolution",
-            type=float,
-            required=True,
-            help="Isotropic voxel size in mm for output (required)"
-        )
-        parser.add_argument(
-            "--denoise-method",
-            choices=["dwidenoise", "patch2self", "none"],
-            default="dwidenoise",
-            help="Denoising method (default: dwidenoise)"
-        )
-        parser.add_argument(
-            "--dwi-only",
-            action="store_true",
-            help="Process only DWI data, ignore anatomical data"
-        )
-        parser.add_argument(
-            "--anat-only",
-            action="store_true",
-            help="Process only anatomical data"
-        )
-        parser.add_argument(
-            "--nprocs",
-            type=int,
-            default=8,
-            help="Number of processes to use (default: 8)"
-        )
-        parser.add_argument(
-            "--omp-nthreads",
-            type=int,
-            default=8,
-            help="Number of OpenMP threads (default: 8)"
-        )
+        pass  # Tool-specific args now passed via --tool-args
     
     @classmethod
     def validate_args(cls, args: argparse.Namespace) -> bool:
@@ -108,9 +88,8 @@ Typical runtime: 4-8 hours per subject
         bool
             True if arguments are valid
         """
-        if not getattr(args, 'output_resolution', None):
-            logger.error("--output-resolution is required for QSIPrep")
-            return False
+        # With --tool-args, we can't easily validate required args here
+        # The container will report errors for missing required arguments
         return True
     
     @classmethod
@@ -148,22 +127,6 @@ Typical runtime: 4-8 hours per subject
         if not dwi_files:
             logger.warning(f"No DWI data found for participant {participant_label}")
             return False
-        
-        # Check for anatomical data unless dwi-only is specified
-        if not getattr(args, 'dwi_only', False):
-            t1w_files = layout.get(
-                subject=participant_label,
-                scope="raw",
-                suffix="T1w",
-                extension=".nii.gz",
-                return_type="filename"
-            )
-            
-            if not t1w_files:
-                logger.warning(f"No T1w images found for participant {participant_label}")
-                if not getattr(args, 'anat_only', False):
-                    logger.info("Consider using --dwi-only flag for DWI-only processing")
-                    return False
         
         return True
     
@@ -243,6 +206,9 @@ Typical runtime: 4-8 hours per subject
         output_dir = dataset_derivatives / output_label
         output_dir.mkdir(parents=True, exist_ok=True)
         
+        # Get tool_args from user
+        tool_args = getattr(args, 'tool_args', '') or ''
+        
         cmd = build_apptainer_cmd(
             tool="qsiprep",
             fs_license=args.fs_license,
@@ -250,12 +216,7 @@ Typical runtime: 4-8 hours per subject
             derivatives=str(output_dir),
             participant_label=participant_label,
             apptainer_img=apptainer_img,
-            output_resolution=getattr(args, 'output_resolution'),
-            denoise_method=getattr(args, 'denoise_method', 'dwidenoise'),
-            dwi_only="--dwi-only" if getattr(args, 'dwi_only', False) else "",
-            anat_only="--anat-only" if getattr(args, 'anat_only', False) else "",
-            nprocs=getattr(args, 'nprocs', 8),
-            omp_nthreads=getattr(args, 'omp_nthreads', 8)
+            tool_args=tool_args
         )
         
         return [cmd] if isinstance(cmd, str) else cmd

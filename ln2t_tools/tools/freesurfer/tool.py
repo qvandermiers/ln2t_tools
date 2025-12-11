@@ -56,19 +56,20 @@ Typical runtime: 6-12 hours per subject
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
         """Add FreeSurfer-specific CLI arguments.
         
-        FreeSurfer currently uses only common arguments (dataset,
-        participant-label, version, etc.). Tool-specific options
-        like T2w/FLAIR are auto-detected.
+        Tool-specific options should be passed via --tool-args.
+        This method is kept for backward compatibility but adds no arguments.
+        
+        Example usage with --tool-args:
+            ln2t_tools freesurfer --dataset MYDATA --participant-label 001 \\
+                --tool-args "-autorecon1"
+                
+        Common FreeSurfer options (pass via --tool-args):
+            -autorecon1     : Motion correction, normalization, skull stripping only
+            -T2 <file>      : Use T2w for pial surface (auto-detected if available)
+            -FLAIR <file>   : Use FLAIR for pial surface (auto-detected if available)
+            -parallel       : Run hemispheres in parallel
         """
-        parser.add_argument(
-            "--skip-surface-recon",
-            action="store_true",
-            default=False,
-            help="Skip surface reconstruction by running only autorecon1 "
-                 "(motion correction, normalization, skull stripping). "
-                 "Useful for quick preprocessing or when only volumetric "
-                 "outputs are needed."
-        )
+        pass  # Tool-specific args now passed via --tool-args
     
     @classmethod
     def validate_args(cls, args: argparse.Namespace) -> bool:
@@ -220,12 +221,12 @@ Typical runtime: 6-12 hours per subject
                 session = entities.get('session')
                 run = entities.get('run')
         
-        # Get additional contrasts
+        # Get additional contrasts (T2w/FLAIR for pial surface improvement)
         additional_contrasts = cls._get_additional_contrasts(
             layout, participant_label, session, run
         )
         
-        # Build FreeSurfer options
+        # Build FreeSurfer options for additional contrasts (T2w/FLAIR)
         fs_options = cls._build_fs_options(
             additional_contrasts, dataset_rawdata
         )
@@ -233,14 +234,12 @@ Typical runtime: 6-12 hours per subject
         version = args.version or cls.default_version
         output_label = args.output_label or f"freesurfer_{version}"
         
-        # Check for skip_surface_recon option
-        skip_surface_recon = getattr(args, 'skip_surface_recon', False)
-        if skip_surface_recon:
-            logger.info("Surface reconstruction will be skipped (using -autorecon1 only)")
-            logger.info("  This performs: motion correction, intensity normalization, "
-                       "Talairach registration, and skull stripping")
-            logger.info("  Surface-based outputs (white/pial surfaces, parcellations) "
-                       "will NOT be generated")
+        # Combine auto-detected options with user-provided tool_args
+        tool_args = getattr(args, 'tool_args', '') or ''
+        if fs_options:
+            # Prepend auto-detected options to user tool_args
+            auto_options = " ".join(fs_options)
+            tool_args = f"{auto_options} {tool_args}".strip()
         
         # Build command using utility function
         cmd = build_apptainer_cmd(
@@ -254,8 +253,7 @@ Typical runtime: 6-12 hours per subject
             output_label=output_label,
             session=session,
             run=run,
-            additional_options=" ".join(fs_options) if fs_options else "",
-            skip_surface_recon=skip_surface_recon
+            tool_args=tool_args
         )
         
         return [cmd] if isinstance(cmd, str) else cmd

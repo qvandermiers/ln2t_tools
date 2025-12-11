@@ -1,9 +1,29 @@
 # Project Context: ln2t_tools
 
 ## Overview
-ln2t_tools is a Python package for managing and processing neuroimaging data following BIDS conventions. It provides command-line tools to run FreeSurfer, fMRIPrep, and QSIPrep pipelines using Apptainer containers.
+ln2t_tools is a Python package for managing and processing neuroimaging data following BIDS conventions. It provides command-line tools to run FreeSurfer, FastSurfer, fMRIPrep, QSIPrep, QSIRecon, MELD Graph, and CVRmap pipelines using Apptainer containers.
 
-## Key Components
+## Architecture
+
+### Tool-Args Pass-Through Pattern
+ln2t_tools uses a pass-through argument pattern for tool-specific options. This design ensures:
+- **Robustness**: ln2t_tools doesn't need updates when upstream tools change their CLI
+- **Flexibility**: Users have access to all tool options, not just a curated subset
+- **Simplicity**: Core ln2t_tools code is simpler without tool-specific argument definitions
+
+How it works:
+1. Core arguments (dataset, participant, version, HPC options) are handled by ln2t_tools
+2. Tool-specific arguments are passed via `--tool-args "<arguments>"`
+3. Arguments in tool_args are passed verbatim to the container
+4. The container (not ln2t_tools) validates tool-specific arguments
+
+Example:
+```bash
+ln2t_tools fmriprep --dataset mydataset --participant-label 01 \
+    --tool-args "--fs-no-reconall --output-spaces MNI152NLin2009cAsym:res-2"
+```
+
+### Key Components
 
 ### Directory Structure
 ```
@@ -13,8 +33,18 @@ ln2t_tools/
 │   ├── ln2t_tools.py        # Main processing logic
 │   ├── cli/
 │   │   └── cli.py           # Command line interface
+│   ├── tools/               # Tool implementations
+│   │   ├── base.py          # Base tool class
+│   │   ├── freesurfer/
+│   │   ├── fastsurfer/
+│   │   ├── fmriprep/
+│   │   ├── qsiprep/
+│   │   ├── qsirecon/
+│   │   ├── meld_graph/
+│   │   └── cvrmap/
 │   ├── utils/
-│   │   ├── utils.py         # Utility functions
+│   │   ├── utils.py         # Utility functions including build_apptainer_cmd
+│   │   ├── hpc.py           # HPC cluster support (SLURM)
 │   │   └── defaults.py      # Default configurations
 │   ├── completion/          # Bash completion
 │   └── install/             # Installation scripts
@@ -28,36 +58,41 @@ ln2t_tools/
 - Apptainer images: `/opt/apptainer/`
 
 ### Main Features
-- FreeSurfer processing with T1w, T2w, and FLAIR support
-- fMRIPrep processing with existing FreeSurfer results integration
-- QSIPrep processing for diffusion-weighted imaging
+- **FreeSurfer**: Cortical reconstruction with T1w, T2w, and FLAIR support
+- **FastSurfer**: Fast deep-learning brain segmentation and surface reconstruction
+- **fMRIPrep**: Functional MRI preprocessing with existing FreeSurfer results integration
+- **QSIPrep**: Diffusion MRI preprocessing
+- **QSIRecon**: Diffusion MRI reconstruction and tractography
+- **MELD Graph**: Focal cortical dysplasia lesion detection
+- **CVRmap**: Cerebrovascular reactivity mapping
 - BIDS-compliant input/output
 - Multi-session and multi-run support
+- HPC cluster support (SLURM)
 - Bash completion for command line usage
-- Instance management to prevent resource overload (max 10 parallel instances)
+- Instance management to prevent resource overload
 
 ### Usage Examples
 ```bash
 # Run FreeSurfer on single participant
 ln2t_tools freesurfer --dataset <dataset> --participant-label <subject>
 
-# Run FreeSurfer on multiple participants
-ln2t_tools freesurfer --dataset <dataset> --participant-label 01 02 42
+# Run fMRIPrep with tool-specific args
+ln2t_tools fmriprep --dataset <dataset> --participant-label <subject> \
+    --tool-args "--fs-no-reconall --output-spaces MNI152NLin2009cAsym:res-2"
 
-# Run fMRIPrep
-ln2t_tools fmriprep --dataset <dataset> --participant-label <subject>
+# Run QSIPrep with output resolution
+ln2t_tools qsiprep --dataset <dataset> --participant-label <subject> \
+    --tool-args "--output-resolution 1.25"
 
-# Run QSIPrep (requires output resolution)
-ln2t_tools qsiprep --dataset <dataset> --participant-label <subject> --output-resolution 1.25
+# Run on HPC cluster
+ln2t_tools fmriprep --dataset <dataset> --participant-label <subject> --hpc \
+    --tool-args "--nprocs 8 --omp-nthreads 4"
 ```
 
 ## Key Functions
-- `process_freesurfer_subject()`: Process subject with FreeSurfer
-- `process_fmriprep_subject()`: Process subject with fMRIPrep
-- `process_qsiprep_subject()`: Process subject with QSIPrep
-- `get_additional_contrasts()`: Get T2w/FLAIR images for enhanced processing
-- `build_apptainer_cmd()`: Generate container commands
-- `get_freesurfer_output()`: Check for existing FreeSurfer results
+- `build_apptainer_cmd()`: Generic container command builder with tool_args pass-through
+- `process_subject()`: Process subject with any tool (dispatches to tool-specific handlers)
+- `generate_hpc_script()`: Generate SLURM batch scripts for HPC submission
 - `InstanceManager`: Manage parallel instances and resource usage
 
 ## Dependencies
@@ -65,12 +100,12 @@ ln2t_tools qsiprep --dataset <dataset> --participant-label <subject> --output-re
 - pybids
 - pandas
 - Apptainer (formerly Singularity)
-- FreeSurfer license file
+- FreeSurfer license file (for FreeSurfer/FastSurfer/fMRIPrep)
 
 ## Notes
+- Tool-specific arguments are passed via `--tool-args`
+- Container validates tool-specific arguments, not ln2t_tools
 - FreeSurfer outputs are reused by fMRIPrep when available
-- QSIPrep requires diffusion-weighted imaging data and output resolution specification
 - Maximum 10 parallel instances by default (configurable with --max-instances)
 - Lock files in `/tmp/ln2t_tools_locks/` track active instances
 - All paths follow BIDS naming conventions
-- Bash completion provides context-aware suggestions

@@ -49,49 +49,31 @@ class MELDGraphTool(BaseTool):
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
         """Add MELD Graph-specific arguments.
         
+        NOTE: Tool-specific arguments are now passed via --tool-args.
+        This method is kept for compatibility but adds no arguments.
+        
+        MELD Graph accepts the following arguments via --tool-args:
+        
+        FreeSurfer options:
+          --fs-version VERSION      FreeSurfer version to use as input
+          --use-precomputed-fs      Use existing FreeSurfer outputs
+          
+        Model options:
+          --download-weights        Download model weights (run once)
+          --skip-feature-extraction Skip feature extraction if already done
+          
+        Harmonization:
+          --harmonize               Compute harmonization parameters
+          --harmo-code CODE         Scanner harmonization code (e.g., H1, H2)
+          
+        Hardware options:
+          --no-gpu                  Disable GPU, use CPU (slower)
+          --gpu-memory-limit MB     GPU memory split size (default: 128)
+        
         Args:
             parser: Argument parser to add arguments to
         """
-        parser.add_argument(
-            "--fs-version",
-            default=DEFAULT_MELD_FS_VERSION,
-            help=f"FreeSurfer version to use as input (default: {DEFAULT_MELD_FS_VERSION})"
-        )
-        parser.add_argument(
-            "--download-weights",
-            action="store_true",
-            help="Download MELD Graph model weights (run once before first use)"
-        )
-        parser.add_argument(
-            "--harmonize",
-            action="store_true",
-            help="Compute harmonization parameters for the provided cohort (requires --harmo-code)"
-        )
-        parser.add_argument(
-            "--harmo-code",
-            help="Harmonization code for scanner (e.g., H1, H2)"
-        )
-        parser.add_argument(
-            "--use-precomputed-fs",
-            action="store_true",
-            help="Use precomputed FreeSurfer outputs instead of running FreeSurfer"
-        )
-        parser.add_argument(
-            "--skip-feature-extraction",
-            action="store_true",
-            help="Skip MELD feature extraction (only use if .sm3.mgh files already exist from a previous run)"
-        )
-        parser.add_argument(
-            "--no-gpu",
-            action="store_true",
-            help="Disable GPU and use CPU for inference (slower but uses less memory)"
-        )
-        parser.add_argument(
-            "--gpu-memory-limit",
-            type=int,
-            default=128,
-            help="GPU memory split size in MB for PyTorch (default: 128)"
-        )
+        pass  # Tool-specific args now passed via --tool-args
     
     @classmethod
     def validate_inputs(
@@ -102,10 +84,8 @@ class MELDGraphTool(BaseTool):
     ) -> Tuple[bool, str]:
         """Validate MELD Graph inputs for a participant.
         
-        Requirements:
-        - T1w image exists
-        - If using precomputed FreeSurfer, FreeSurfer outputs must exist
-        - If harmonizing, demographics file must be valid
+        With the --tool-args pattern, most validation is delegated to the
+        container. This method only checks for T1w data existence.
         
         Args:
             layout: BIDSLayout object for the BIDS dataset
@@ -125,39 +105,8 @@ class MELDGraphTool(BaseTool):
         if not t1w_files:
             return False, f"No T1w data found for participant {participant_label}"
         
-        # If using precomputed FreeSurfer, check it exists
-        use_precomputed = getattr(args, 'use_precomputed_fs', False)
-        if use_precomputed:
-            dataset_derivatives = Path(args.dataset) / "derivatives"
-            fs_version = getattr(args, 'fs_version', DEFAULT_MELD_FS_VERSION)
-            fs_dir = dataset_derivatives / f"freesurfer_{fs_version}" / f"sub-{participant_label}"
-            
-            if not fs_dir.exists():
-                return False, (
-                    f"FreeSurfer output not found for {participant_label} at {fs_dir}. "
-                    f"Cannot use --use-precomputed-fs without existing FreeSurfer outputs."
-                )
-            
-            # Check for critical FreeSurfer outputs
-            required_files = [
-                fs_dir / "surf" / "lh.white",
-                fs_dir / "surf" / "rh.white",
-                fs_dir / "surf" / "lh.pial",
-                fs_dir / "surf" / "rh.pial",
-            ]
-            
-            missing = [str(f) for f in required_files if not f.exists()]
-            if missing:
-                return False, (
-                    f"FreeSurfer outputs incomplete for {participant_label}. "
-                    f"Missing: {missing}"
-                )
-        
-        # If harmonize, check harmo-code is provided
-        harmonize = getattr(args, 'harmonize', False)
-        if harmonize and not getattr(args, 'harmo_code', None):
-            return False, "--harmo-code is required when using --harmonize"
-        
+        # Other validations (FreeSurfer existence, harmonization) are now
+        # delegated to the container via --tool-args
         return True, ""
     
     @classmethod
@@ -201,9 +150,7 @@ class MELDGraphTool(BaseTool):
         """Build the Apptainer command for MELD Graph.
         
         Note: MELD Graph uses a specialized command builder due to its
-        complex directory structure and workflow. This method prepares
-        the environment but the actual command construction happens in
-        the main module's build_apptainer_cmd function.
+        complex directory structure and workflow.
         
         Args:
             layout: BIDSLayout object
@@ -218,23 +165,21 @@ class MELDGraphTool(BaseTool):
         Returns:
             List of command components
         """
-        # MELD Graph has a very specific directory structure and workflow
-        # that is handled in the main processing function
-        # This method returns the key parameters for command building
-        
         meld_version = args.version or cls.default_version
+        
+        # Get tool_args from user
+        tool_args = getattr(args, 'tool_args', '') or ''
         
         # Build basic Apptainer command structure
         cmd = ["apptainer", "run", "--cleanenv"]
         
-        # GPU support
-        use_gpu = not getattr(args, 'no_gpu', False)
+        # GPU support - check if --no-gpu is in tool_args
+        use_gpu = '--no-gpu' not in tool_args
         if use_gpu:
             cmd.extend(["--nv"])  # NVIDIA GPU support
         
-        # Environment variable for GPU memory
-        gpu_memory = getattr(args, 'gpu_memory_limit', 128)
-        cmd.extend(["--env", f"PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:{gpu_memory}"])
+        # Default GPU memory environment
+        cmd.extend(["--env", "PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128"])
         
         # MELD data directory structure
         meld_data_dir = dataset_derivatives / f"meld_graph_{meld_version}" / "data"
@@ -246,41 +191,19 @@ class MELDGraphTool(BaseTool):
         fs_license = str(args.fs_license)
         cmd.extend(["-B", f"{fs_license}:/opt/freesurfer/license.txt"])
         
-        # Handle precomputed FreeSurfer outputs
-        use_precomputed = getattr(args, 'use_precomputed_fs', False)
-        if use_precomputed:
-            fs_version = getattr(args, 'fs_version', DEFAULT_MELD_FS_VERSION)
-            fs_subjects_dir = dataset_derivatives / f"freesurfer_{fs_version}"
-            if fs_subjects_dir.exists():
-                cmd.extend(["-B", f"{fs_subjects_dir}:/data/output/fs_outputs"])
-        
         # Add the container image
         cmd.append(apptainer_img)
         
-        # Add MELD command and arguments
+        # Add MELD command and basic arguments
         cmd.extend([
             "python", "-m", "scripts.manage_results.run_script_prediction",
             "--subject-id", f"sub-{participant_label}",
             "--data-dir", "/data"
         ])
         
-        # Harmonization options
-        harmo_code = getattr(args, 'harmo_code', None)
-        if harmo_code:
-            cmd.extend(["--harmo-code", harmo_code])
-        
-        skip_feature_extraction = getattr(args, 'skip_feature_extraction', False)
-        if skip_feature_extraction:
-            cmd.append("--skip-feature-extraction")
-        
-        harmonize = getattr(args, 'harmonize', False)
-        if harmonize:
-            cmd.append("--harmo-only")
-        
-        # Additional options
-        additional_opts = getattr(args, 'additional_options', '')
-        if additional_opts:
-            cmd.extend(additional_opts.split())
+        # Append tool-specific args passed via --tool-args
+        if tool_args:
+            cmd.extend(tool_args.split())
         
         return cmd
     
@@ -324,4 +247,5 @@ class MELDGraphTool(BaseTool):
         Returns:
             True if harmonization workflow is requested
         """
-        return getattr(args, 'harmonize', False)
+        tool_args = getattr(args, 'tool_args', '') or ''
+        return '--harmonize' in tool_args

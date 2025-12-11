@@ -1056,6 +1056,9 @@ def generate_hpc_script(
 ) -> str:
     """Generate HPC batch script for job submission.
     
+    This function generates SLURM batch scripts with tool_args pass-through.
+    Tool-specific arguments should be provided via --tool-args on the CLI.
+    
     Parameters
     ----------
     tool : str
@@ -1065,7 +1068,7 @@ def generate_hpc_script(
     dataset : str
         Dataset name
     args : argparse.Namespace
-        Parsed command line arguments
+        Parsed command line arguments (includes tool_args)
     hpc_rawdata : str
         Path to rawdata on HPC (can be None to use $GLOBALSCRATCH/rawdata)
     hpc_derivatives : str
@@ -1078,14 +1081,13 @@ def generate_hpc_script(
     str
         HPC batch script content
     """
+    # Get tool_args for pass-through
+    tool_args = getattr(args, 'tool_args', '') or ''
+    
     # Determine job name
-    if tool == "meld_graph" and getattr(args, 'harmonize', False):
-        job_name = f"meld_harmo-{dataset}-{participant_label}"
-    else:
-        job_name = f"{tool}-{dataset}-{participant_label}"
+    job_name = f"{tool}-{dataset}-{participant_label}"
     
     # Paths should be resolved by caller - these are fallbacks
-    # Note: These should be actual paths, not $GLOBALSCRATCH which isn't available in SLURM jobs
     if not hpc_rawdata:
         logger.warning("hpc_rawdata not provided to generate_hpc_script - using $GLOBALSCRATCH fallback")
         hpc_rawdata = "$GLOBALSCRATCH/rawdata"
@@ -1138,6 +1140,7 @@ HPC_RAWDATA="{hpc_rawdata}"
 HPC_DERIVATIVES="{hpc_derivatives}"
 DATASET="{dataset}"
 PARTICIPANT="sub-{participant_label}"
+TOOL_ARGS="{tool_args}"
 """
     
     # Tool-specific command generation
@@ -1160,7 +1163,7 @@ apptainer exec \\
     -B "$FS_LICENSE:/opt/freesurfer/license.txt:ro" \\
     --env SUBJECTS_DIR=/output \\
     {apptainer_img} \\
-    recon-all -s "$PARTICIPANT" -i "/data/$PARTICIPANT/anat/"*"_T1w.nii.gz" -all
+    recon-all -s "$PARTICIPANT" -i "/data/$PARTICIPANT/anat/"*"_T1w.nii.gz" -all $TOOL_ARGS
 """
     
     elif tool == "fastsurfer":
@@ -1169,45 +1172,10 @@ apptainer exec \\
         apptainer_img = f"{hpc_apptainer_dir}/deepmi.fastsurfer.{version}.sif"
         output_dir = f"$HPC_DERIVATIVES/$DATASET-derivatives/fastsurfer_{version}"
         
-        # Processing mode flags
-        seg_only = getattr(args, 'seg_only', False)
-        surf_only = getattr(args, 'surf_only', False)
-        
-        # Build FastSurfer options
-        fs_opts = []
-        
-        if seg_only:
-            fs_opts.append("--seg_only")
-        elif surf_only:
-            fs_opts.append("--surf_only")
-        
-        if getattr(args, 'three_tesla', False):
-            fs_opts.append("--3T")
-        
-        threads = getattr(args, 'threads', 4)
-        fs_opts.append(f"--threads {threads}")
-        
-        device = getattr(args, 'device', 'auto')
-        if device == 'cpu':
-            fs_opts.append("--device cpu")
-        elif device == 'cuda':
-            fs_opts.append("--device cuda")
-        # 'auto' is the default, no flag needed
-        
-        vox_size = getattr(args, 'vox_size', 'min')
-        fs_opts.append(f"--vox_size {vox_size}")
-        
-        if getattr(args, 'no_cereb', False):
-            fs_opts.append("--no_cereb")
-        if getattr(args, 'no_hypothal', False):
-            fs_opts.append("--no_hypothal")
-        if getattr(args, 'no_biasfield', False):
-            fs_opts.append("--no_biasfield")
-        
-        fs_opts_str = " \\\n    ".join(fs_opts) if fs_opts else ""
-        
-        # GPU support
-        gpu_flag = "--nv" if device != 'cpu' else ""
+        # GPU support - check for --device cpu or --no-gpu in tool_args
+        gpu_flag = "--nv"
+        if '--device cpu' in tool_args or 'device=cpu' in tool_args:
+            gpu_flag = ""
         
         script += f"""
 # FastSurfer setup
@@ -1235,7 +1203,7 @@ apptainer exec {gpu_flag} \\
     --sid $PARTICIPANT \\
     --t1 "$T1W_FILE" \\
     --fs_license /opt/freesurfer/license.txt \\
-    {fs_opts_str}
+    $TOOL_ARGS
 """
     
     elif tool == "fmriprep":
@@ -1243,14 +1211,6 @@ apptainer exec {gpu_flag} \\
         fs_license = getattr(args, 'hpc_fs_license', None) or '$HOME/licenses/license.txt'
         apptainer_img = f"{hpc_apptainer_dir}/nipreps.fmriprep.{version}.sif"
         output_dir = f"$HPC_DERIVATIVES/$DATASET-derivatives/fmriprep_{version}"
-        
-        output_spaces = getattr(args, 'output_spaces', ['MNI152NLin2009cAsym:res-2'])
-        if isinstance(output_spaces, list):
-            output_spaces_str = ' '.join(output_spaces)
-        else:
-            output_spaces_str = output_spaces
-        
-        fs_reconall = "--fs-no-reconall" if getattr(args, 'fs_no_reconall', False) else ""
         
         script += f"""
 # fMRIPrep setup
@@ -1260,7 +1220,7 @@ WORK_DIR="$OUTPUT_DIR/work"
 mkdir -p "$OUTPUT_DIR" "$WORK_DIR"
 
 # Run fMRIPrep
-apptainer exec \\
+apptainer run \\
     -B "$HPC_RAWDATA/$DATASET-rawdata:/data:ro" \\
     -B "$OUTPUT_DIR:/out" \\
     -B "$WORK_DIR:/work" \\
@@ -1270,24 +1230,15 @@ apptainer exec \\
     {apptainer_img} \\
     /data /out participant \\
     --participant-label {participant_label} \\
-    --output-spaces {output_spaces_str} \\
     -w /work \\
     --skip-bids-validation \\
-    {fs_reconall}
+    $TOOL_ARGS
 """
     
     elif tool == "qsiprep":
         version = getattr(args, 'version', '1.0.1')
         apptainer_img = f"{hpc_apptainer_dir}/pennlinc.qsiprep.{version}.sif"
         output_dir = f"$HPC_DERIVATIVES/$DATASET-derivatives/qsiprep_{version}"
-        output_resolution = getattr(args, 'output_resolution', None)
-        denoise_method = getattr(args, 'denoise_method', 'dwidenoise')
-        
-        if not output_resolution:
-            raise ValueError("--output-resolution is required for QSIPrep")
-        
-        dwi_only = "--dwi-only" if getattr(args, 'dwi_only', False) else ""
-        anat_only = "--anat-only" if getattr(args, 'anat_only', False) else ""
         
         script += f"""
 # QSIPrep setup
@@ -1304,20 +1255,18 @@ apptainer exec \\
     {apptainer_img} \\
     /data /out participant \\
     --participant-label {participant_label} \\
-    --output-resolution {output_resolution} \\
-    --denoise-method {denoise_method} \\
     -w /work \\
     --skip-bids-validation \\
-    {dwi_only} {anat_only}
+    $TOOL_ARGS
 """
     
     elif tool == "qsirecon":
+        from ln2t_tools.utils.defaults import DEFAULT_QSIPREP_VERSION
+        
         version = getattr(args, 'version', '1.1.1')
-        qsiprep_version = getattr(args, 'qsiprep_version', '1.0.1')
         apptainer_img = f"{hpc_apptainer_dir}/pennlinc.qsirecon.{version}.sif"
         output_dir = f"$HPC_DERIVATIVES/$DATASET-derivatives/qsirecon_{version}"
-        qsiprep_dir = f"$HPC_DERIVATIVES/$DATASET-derivatives/qsiprep_{qsiprep_version}"
-        recon_spec = getattr(args, 'recon_spec', 'mrtrix_multishell_msmt_ACT-hsvs')
+        qsiprep_dir = f"$HPC_DERIVATIVES/$DATASET-derivatives/qsiprep_{DEFAULT_QSIPREP_VERSION}"
         
         script += f"""
 # QSIRecon setup
@@ -1335,9 +1284,9 @@ apptainer exec \\
     {apptainer_img} \\
     /qsiprep /out participant \\
     --participant-label {participant_label} \\
-    --recon-spec {recon_spec} \\
     -w /work \\
-    --skip-bids-validation
+    --skip-bids-validation \\
+    $TOOL_ARGS
 """
     
     elif tool == "meld_graph":
@@ -1345,31 +1294,12 @@ apptainer exec \\
         fs_license = getattr(args, 'hpc_fs_license', None) or '$HOME/licenses/license.txt'
         apptainer_img = f"{hpc_apptainer_dir}/meldproject.meld_graph.{version}.sif"
         
-        # GPU settings
-        if getattr(args, 'no_gpu', False):
+        # GPU settings - check for --no-gpu in tool_args
+        gpu_flag = "--nv"
+        env_vars = "--env PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128 --env CUDA_LAUNCH_BLOCKING=1"
+        if '--no-gpu' in tool_args:
             gpu_flag = ""
             env_vars = "--env CUDA_VISIBLE_DEVICES=''"
-        else:
-            gpu_flag = "--nv"
-            gpu_mem = getattr(args, 'gpu_memory_limit', 128)
-            env_vars = f"--env PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:{gpu_mem} --env CUDA_LAUNCH_BLOCKING=1"
-        
-        # FreeSurfer binding if using precomputed
-        fs_subjects_dir_bind = ""
-        if getattr(args, 'use_precomputed_fs', False):
-            fs_version = getattr(args, 'fs_version', '7.2.0')
-            fs_subjects_dir_bind = f"-B $HPC_DERIVATIVES/$DATASET-derivatives/freesurfer_{fs_version}:/data/output/fs_outputs"
-        
-        # Build Python command
-        if getattr(args, 'harmonize', False):
-            harmo_code = getattr(args, 'harmo_code', participant_label)
-            python_cmd = f"python scripts/new_patient_pipeline/new_pt_pipeline.py -harmo_code {harmo_code} -ids /data/subjects_list.txt -demos /data/demographics_{harmo_code}.csv --harmo_only"
-        else:
-            python_cmd = f"python scripts/new_patient_pipeline/new_pt_pipeline.py -id sub-{participant_label}"
-            if getattr(args, 'harmo_code', None):
-                python_cmd += f" -harmo_code {args.harmo_code}"
-            if getattr(args, 'skip_feature_extraction', False):
-                python_cmd += " --skip_feature_extraction"
         
         script += f"""
 # MELD Graph setup
@@ -1403,9 +1333,8 @@ apptainer exec {gpu_flag} \\
     -B "{fs_license}:/license.txt:ro" \\
     --env FS_LICENSE=/license.txt \\
     {env_vars} \\
-    {fs_subjects_dir_bind} \\
     {apptainer_img} \\
-    /bin/bash -c 'cd /app && {python_cmd}'
+    python scripts/new_patient_pipeline/new_pt_pipeline.py -id sub-{participant_label} $TOOL_ARGS
 """
     
     elif tool == "cvrmap":
@@ -1413,42 +1342,10 @@ apptainer exec {gpu_flag} \\
         # Requires fMRIPrep preprocessed data
         from ln2t_tools.utils.defaults import DEFAULT_CVRMAP_FMRIPREP_VERSION
         
-        version = getattr(args, 'version', '4.3.0')
-        fmriprep_version = getattr(args, 'fmriprep_version', DEFAULT_CVRMAP_FMRIPREP_VERSION)
+        version = getattr(args, 'version', '4.3.1')
         apptainer_img = f"{hpc_apptainer_dir}/ln2t.cvrmap.{version}.sif"
         output_dir = f"$HPC_DERIVATIVES/$DATASET-derivatives/cvrmap_{version}"
-        fmriprep_dir = f"$HPC_DERIVATIVES/$DATASET-derivatives/fmriprep_{fmriprep_version}"
-        
-        # Build optional arguments
-        task_opt = ""
-        task = getattr(args, 'task', None)
-        if task:
-            task_opt = f"--task {task}"
-        
-        space_opt = ""
-        space = getattr(args, 'space', None)
-        if space:
-            space_opt = f"--space {space}"
-        
-        baseline_method_opt = ""
-        baseline_method = getattr(args, 'baseline_method', None)
-        if baseline_method:
-            baseline_method_opt = f"--baseline-method {baseline_method}"
-        
-        roi_opts = ""
-        if getattr(args, 'roi_probe', False):
-            roi_opts = "--roi-probe"
-            roi_coordinates = getattr(args, 'roi_coordinates', None)
-            if roi_coordinates:
-                roi_opts += f" --roi-coordinates {roi_coordinates}"
-            roi_radius = getattr(args, 'roi_radius', None)
-            if roi_radius:
-                roi_opts += f" --roi-radius {roi_radius}"
-        
-        n_jobs_opt = ""
-        n_jobs = getattr(args, 'n_jobs', None)
-        if n_jobs and n_jobs != 1:
-            n_jobs_opt = f"--n-jobs {n_jobs}"
+        fmriprep_dir = f"$HPC_DERIVATIVES/$DATASET-derivatives/fmriprep_{DEFAULT_CVRMAP_FMRIPREP_VERSION}"
         
         script += f"""
 # CVRmap setup
@@ -1465,7 +1362,7 @@ apptainer run \\
     /data /derivatives participant \\
     --participant-label {participant_label} \\
     --derivatives fmriprep=/fmriprep \\
-    {task_opt} {space_opt} {baseline_method_opt} {roi_opts} {n_jobs_opt}
+    $TOOL_ARGS
 """
     
     else:
@@ -1679,7 +1576,7 @@ def print_download_command(tool: str, dataset: str, args: Any, job_ids: List[str
         'qsiprep': '1.0.1',
         'qsirecon': '1.1.1',
         'meld_graph': 'v2.2.3',
-        'cvrmap': '4.3.0'
+        'cvrmap': '4.3.1'
     }.get(tool, ''))
     
     remote_path = f"{hpc_derivatives}/{dataset}-derivatives/{tool}_{version}/"

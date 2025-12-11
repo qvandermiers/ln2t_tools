@@ -132,6 +132,17 @@ def add_common_arguments(parser):
         default=MAX_PARALLEL_INSTANCES,
         help=f"Maximum number of parallel instances (default: {MAX_PARALLEL_INSTANCES})"
     )
+    
+    parser.add_argument(
+        "--tool-args",
+        type=str,
+        default="",
+        help="Additional arguments passed directly to the tool container. "
+             "Use quotes to pass multiple arguments, e.g., "
+             '--tool-args "--output-resolution 2.0 --denoise-method dwidenoise". '
+             "These arguments are appended verbatim to the container command. "
+             "Refer to each tool's documentation for available options."
+    )
 
 
 def add_hpc_arguments(parser):
@@ -264,15 +275,18 @@ def parse_args() -> argparse.Namespace:
     for tool_name, tool_class in get_all_tools().items():
         tool_parser = subparsers.add_parser(
             tool_name,
-            help=tool_class.description,
+            help=tool_class.help_text if hasattr(tool_class, 'help_text') else tool_class.description,
+            description=tool_class.description,
             formatter_class=argparse.RawDescriptionHelpFormatter
         )
         # Add common arguments (dataset, participant, version, etc.)
         add_common_arguments(tool_parser)
         # Add HPC arguments for cluster submission
         add_hpc_arguments(tool_parser)
-        # Add tool-specific arguments
-        tool_class.add_arguments(tool_parser)
+        # NOTE: Tool-specific arguments are NO LONGER added here.
+        # Instead, users should use --tool-args to pass any tool-specific
+        # options directly to the container. This decouples ln2t_tools
+        # from tool-specific CLI changes.
 
     # Import subcommand (special case - not a standard tool)
     parser_import = subparsers.add_parser(

@@ -170,6 +170,102 @@ ln2t_tools freesurfer --dataset mydataset --participant-label 01
 
 ---
 
+## Tool-Specific Arguments with --tool-args
+
+ln2t_tools uses a pass-through argument pattern for tool-specific options. This allows the tools to be updated independently of ln2t_tools, and gives you access to the full range of options each tool supports.
+
+### How it Works
+
+Core arguments (dataset, participant, version, HPC options) are handled by ln2t_tools. Tool-specific arguments are passed verbatim to the container using `--tool-args`:
+
+```bash
+ln2t_tools <tool> --dataset mydataset --participant-label 01 --tool-args "<tool-specific-arguments>"
+```
+
+### Examples
+
+#### FreeSurfer
+```bash
+# Skip surface reconstruction (segmentation only)
+ln2t_tools freesurfer --dataset mydataset --participant-label 01 \
+    --tool-args "-parallel"
+```
+
+#### FastSurfer
+```bash
+# Run segmentation only (fast mode, ~5 min on GPU)
+ln2t_tools fastsurfer --dataset mydataset --participant-label 01 \
+    --tool-args "--seg-only --threads 4"
+
+# Run on CPU with 3T atlas
+ln2t_tools fastsurfer --dataset mydataset --participant-label 01 \
+    --tool-args "--device cpu --3T --threads 8"
+```
+
+#### fMRIPrep
+```bash
+# Skip FreeSurfer reconstruction with specific output spaces
+ln2t_tools fmriprep --dataset mydataset --participant-label 01 \
+    --tool-args "--fs-no-reconall --output-spaces MNI152NLin2009cAsym:res-2 fsaverage:den-10k"
+
+# Set number of threads
+ln2t_tools fmriprep --dataset mydataset --participant-label 01 \
+    --tool-args "--nprocs 8 --omp-nthreads 4"
+```
+
+#### QSIPrep
+```bash
+# Basic preprocessing with output resolution
+ln2t_tools qsiprep --dataset mydataset --participant-label 01 \
+    --tool-args "--output-resolution 1.25 --denoise-method dwidenoise"
+
+# DWI-only processing
+ln2t_tools qsiprep --dataset mydataset --participant-label 01 \
+    --tool-args "--output-resolution 2.0 --dwi-only"
+```
+
+#### QSIRecon
+```bash
+# Tractography reconstruction
+ln2t_tools qsirecon --dataset mydataset --participant-label 01 \
+    --tool-args "--recon-spec mrtrix_multishell_msmt_ACT-hsvs"
+```
+
+#### MELD Graph
+```bash
+# Run with harmonization
+ln2t_tools meld_graph --dataset mydataset --participant-label 01 \
+    --tool-args "--harmonize --harmo-code H1"
+
+# Skip feature extraction (if already computed)
+ln2t_tools meld_graph --dataset mydataset --participant-label 01 \
+    --tool-args "--skip-feature-extraction"
+```
+
+#### CVRmap
+```bash
+# Specific task with ROI probe
+ln2t_tools cvrmap --dataset mydataset --participant-label 01 \
+    --tool-args "--task gas --space MNI152NLin2009cAsym"
+
+# Using ROI-based probe
+ln2t_tools cvrmap --dataset mydataset --participant-label 01 \
+    --tool-args "--roi-probe --roi-coordinates 0 -52 26 --roi-radius 6"
+```
+
+### Finding Available Options
+
+Each tool has its own documentation for available options:
+- **FreeSurfer**: `recon-all --help` or [FreeSurfer Wiki](https://surfer.nmr.mgh.harvard.edu/fswiki/recon-all)
+- **FastSurfer**: [FastSurfer Documentation](https://deep-mi.org/research/fastsurfer/)
+- **fMRIPrep**: `fmriprep --help` or [fMRIPrep Documentation](https://fmriprep.org/en/stable/usage.html)
+- **QSIPrep**: `qsiprep --help` or [QSIPrep Documentation](https://qsiprep.readthedocs.io/)
+- **QSIRecon**: [QSIRecon Documentation](https://qsiprep.readthedocs.io/)
+- **MELD Graph**: [MELD Graph Documentation](https://meld-graph.readthedocs.io/)
+- **CVRmap**: [CVRmap Documentation](https://github.com/arovai/cvrmap)
+
+---
+
 ## Pipeline Usage Examples
 
 ### FreeSurfer

@@ -64,33 +64,22 @@ Typical runtime: 2-6 hours per subject (depending on data)
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
         """Add fMRIPrep-specific CLI arguments.
         
-        Parameters
-        ----------
-        parser : argparse.ArgumentParser
-            The subparser for this tool
+        Tool-specific options should be passed via --tool-args.
+        This method is kept for backward compatibility but adds no arguments.
+        
+        Example usage with --tool-args:
+            ln2t_tools fmriprep --dataset MYDATA --participant-label 001 \\
+                --tool-args "--output-spaces MNI152NLin2009cAsym:res-2 --nprocs 8"
+                
+        Common fMRIPrep options (pass via --tool-args):
+            --output-spaces <spaces>  : Output template spaces
+            --fs-no-reconall          : Skip FreeSurfer surface reconstruction
+            --use-aroma               : Enable ICA-AROMA denoising
+            --nprocs <n>              : Number of processes
+            --omp-nthreads <n>        : Number of OpenMP threads
+            --ignore fieldmaps        : Ignore fieldmap correction
         """
-        parser.add_argument(
-            "--fs-no-reconall",
-            action="store_true",
-            help="Skip FreeSurfer surface reconstruction"
-        )
-        parser.add_argument(
-            "--output-spaces",
-            default="MNI152NLin2009cAsym:res-2",
-            help="Output spaces (default: MNI152NLin2009cAsym:res-2)"
-        )
-        parser.add_argument(
-            "--nprocs",
-            type=int,
-            default=8,
-            help="Number of processes to use (default: 8)"
-        )
-        parser.add_argument(
-            "--omp-nthreads",
-            type=int,
-            default=8,
-            help="Number of OpenMP threads (default: 8)"
-        )
+        pass  # Tool-specific args now passed via --tool-args
     
     @classmethod
     def validate_args(cls, args: argparse.Namespace) -> bool:
@@ -229,43 +218,15 @@ Typical runtime: 2-6 hours per subject (depending on data)
         List[str]
             Command as list of strings
         """
-        from ln2t_tools.utils.utils import build_apptainer_cmd, get_freesurfer_output
-        
-        # Check for existing FreeSurfer output
-        t1w_files = layout.get(
-            subject=participant_label,
-            scope="raw",
-            suffix="T1w",
-            extension=".nii.gz",
-            return_type="filename"
-        )
-        
-        entities = layout.parse_file_entities(t1w_files[0]) if t1w_files else {}
-        fs_output_dir = get_freesurfer_output(
-            derivatives_dir=dataset_derivatives,
-            participant_label=participant_label,
-            version=DEFAULT_FS_VERSION,
-            session=entities.get('session'),
-            run=entities.get('run')
-        )
-        
-        # Determine FreeSurfer options
-        fs_no_reconall = ""
-        if fs_output_dir and not getattr(args, 'fs_no_reconall', False):
-            logger.info(f"Using existing FreeSurfer output: {fs_output_dir}")
-            fs_no_reconall = "--fs-no-reconall"
-        elif getattr(args, 'fs_no_reconall', False):
-            logger.info("FreeSurfer reconstruction disabled by user")
-            fs_no_reconall = "--fs-no-reconall"
-            fs_output_dir = None
-        else:
-            logger.info("No existing FreeSurfer output found, will run reconstruction")
-            fs_output_dir = None
+        from ln2t_tools.utils.utils import build_apptainer_cmd
         
         version = args.version or cls.default_version
         output_label = args.output_label or f"fmriprep_{version}"
         output_dir = dataset_derivatives / output_label
         output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Get tool_args from user
+        tool_args = getattr(args, 'tool_args', '') or ''
         
         cmd = build_apptainer_cmd(
             tool="fmriprep",
@@ -274,11 +235,7 @@ Typical runtime: 2-6 hours per subject (depending on data)
             derivatives=str(output_dir),
             participant_label=participant_label,
             apptainer_img=apptainer_img,
-            fs_no_reconall=fs_no_reconall,
-            output_spaces=getattr(args, 'output_spaces', "MNI152NLin2009cAsym:res-2"),
-            nprocs=getattr(args, 'nprocs', 8),
-            omp_nthreads=getattr(args, 'omp_nthreads', 8),
-            fs_subjects_dir=fs_output_dir
+            tool_args=tool_args
         )
         
         return [cmd] if isinstance(cmd, str) else cmd

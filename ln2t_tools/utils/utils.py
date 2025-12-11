@@ -402,7 +402,29 @@ def get_freesurfer_output(
     return fs_dir if fs_dir.exists() and (fs_dir / "surf/rh.white").exists() else None
 
 def build_apptainer_cmd(tool: str, **options) -> str:
-    """Build Apptainer command for neuroimaging tools."""
+    """Build Apptainer command for neuroimaging tools.
+    
+    This function builds the base Apptainer command with required bindings
+    for each tool. Tool-specific options are passed via the 'tool_args'
+    parameter and appended verbatim to the command.
+    
+    Parameters
+    ----------
+    tool : str
+        Tool name ('freesurfer', 'fmriprep', 'qsiprep', etc.)
+    **options : dict
+        Required options vary by tool:
+        - All tools: apptainer_img, rawdata, derivatives, participant_label
+        - Most tools: fs_license (FreeSurfer license path)
+        - tool_args: string of additional arguments passed to the container
+        
+    Returns
+    -------
+    str
+        Complete Apptainer command string
+    """
+    tool_args = options.get('tool_args', '').strip()
+    
     if tool == "freesurfer":
         if "fs_license" not in options:
             raise ValueError("FreeSurfer license file path is required")
@@ -415,66 +437,49 @@ def build_apptainer_cmd(tool: str, **options) -> str:
             subject_id += f"_run-{options['run']}"
         
         # Convert host paths to container paths
-        # The rawdata is bound to /rawdata in the container
         rawdata_host = Path(options['rawdata'])
         t1w_host = Path(options['t1w'])
         
-        # Get relative path from rawdata to t1w file
         try:
             t1w_relative = t1w_host.relative_to(rawdata_host)
             t1w_container = f"/rawdata/{t1w_relative}"
         except ValueError:
-            # If t1w is not under rawdata, use absolute path (fallback)
             t1w_container = str(t1w_host)
         
-        # Determine recon-all directive: -autorecon1 (volumetric only) or -all (full pipeline)
-        if options.get('skip_surface_recon', False):
-            recon_directive = "-autorecon1"
-        else:
-            recon_directive = "-all"
-            
-        return (
+        cmd = (
             f"apptainer run -B {options['fs_license']}:/usr/local/freesurfer/.license "
             f"-B {options['rawdata']}:/rawdata:ro -B {options['derivatives']}:/derivatives "
-            f"{options['apptainer_img']} recon-all {recon_directive} -subjid {subject_id} "
+            f"{options['apptainer_img']} recon-all -all -subjid {subject_id} "
             f"-i {t1w_container} "
-            f"-sd /derivatives/{options['output_label']} "
-            f"{options.get('additional_options', '')}"
+            f"-sd /derivatives/{options['output_label']}"
         )
+        if tool_args:
+            cmd += f" {tool_args}"
+        return cmd
+        
     elif tool == "fmriprep":
-        fs_subjects_dir = options.get('fs_subjects_dir', '')
-        fs_bind_option = (
-            f"-B {fs_subjects_dir.parent}:/opt/freesurfer/subjects:ro" 
-            if fs_subjects_dir else ""
-        )
-        fs_subjects_dir_option = (
-            f"--fs-subjects-dir /opt/freesurfer/subjects/{fs_subjects_dir.name} " 
-            if fs_subjects_dir else ""
-        )
+        if "fs_license" not in options:
+            raise ValueError("FreeSurfer license file path is required")
         
-        # Add --use-aroma for fMRIPrep version 21.0.4 (required for CVRmap compatibility)
-        version = options.get('version', '')
-        aroma_option = "--use-aroma " if version == "21.0.4" else ""
-        
-        return (
+        cmd = (
             f"apptainer run "
             f"-B {options['fs_license']}:/opt/freesurfer/license.txt "
             f"-B {options['rawdata']}:/data:ro "
             f"-B {options['derivatives']}:/derivatives "
-            f"{fs_bind_option} "
             f"{options['apptainer_img']} "
             f"/data /derivatives participant "
             f"--participant-label {options['participant_label']} "
-            f"--output-spaces {options.get('output_spaces', 'MNI152NLin2009cAsym:res-2')} "
-            f"--nprocs {options.get('nprocs', 8)} "
-            f"--omp-nthreads {options.get('omp_nthreads', 8)} "
-            f"--fs-license-file /opt/freesurfer/license.txt "
-            f"{aroma_option}"
-            f"{options.get('fs_no_reconall', '')} "
-            f"{fs_subjects_dir_option}"
+            f"--fs-license-file /opt/freesurfer/license.txt"
         )
+        if tool_args:
+            cmd += f" {tool_args}"
+        return cmd
+        
     elif tool == "qsiprep":
-        return (
+        if "fs_license" not in options:
+            raise ValueError("FreeSurfer license file path is required")
+        
+        cmd = (
             f"apptainer run "
             f"-B {options['fs_license']}:/opt/freesurfer/license.txt "
             f"-B {options['rawdata']}:/data:ro "
@@ -482,22 +487,22 @@ def build_apptainer_cmd(tool: str, **options) -> str:
             f"{options['apptainer_img']} "
             f"/data /out participant "
             f"--participant-label {options['participant_label']} "
-            f"--output-resolution {options['output_resolution']} "
-            f"--denoise-method {options.get('denoise_method', 'dwidenoise')} "
-            f"--nprocs {options.get('nprocs', 8)} "
-            f"--omp-nthreads {options.get('omp_nthreads', 8)} "
             f"--fs-license-file /opt/freesurfer/license.txt "
-            f"--skip-bids-validation "
-            f"{options.get('dwi_only', '')} "
-            f"{options.get('anat_only', '')}"
+            f"--skip-bids-validation"
         )
+        if tool_args:
+            cmd += f" {tool_args}"
+        return cmd
+        
     elif tool == "qsirecon":
-        # QSIRecon for DWI reconstruction - requires QSIPrep preprocessed data
+        if "fs_license" not in options:
+            raise ValueError("FreeSurfer license file path is required")
+        
         qsiprep_dir = options.get('qsiprep_dir', '')
         if not qsiprep_dir:
             raise ValueError("qsiprep_dir is required for QSIRecon")
         
-        return (
+        cmd = (
             f"apptainer run "
             f"-B {options['fs_license']}:/opt/freesurfer/license.txt "
             f"-B {qsiprep_dir}:/data:ro "
@@ -505,117 +510,13 @@ def build_apptainer_cmd(tool: str, **options) -> str:
             f"{options['apptainer_img']} "
             f"/data /out participant "
             f"--participant-label {options['participant_label']} "
-            f"--recon-spec {options.get('recon_spec', 'mrtrix_multishell_msmt_ACT-hsvs')} "
-            f"--nprocs {options.get('nprocs', 8)} "
-            f"--omp-nthreads {options.get('omp_nthreads', 8)} "
-            f"--fs-license-file /opt/freesurfer/license.txt "
-            f"{options.get('additional_options', '')}"
+            f"--fs-license-file /opt/freesurfer/license.txt"
         )
-    elif tool == "meld_graph":
-        # MELD Graph for lesion detection with proper directory structure
-        # MELD expects:
-        # - /data for input/output structure
-        # - /license.txt for FreeSurfer license
-        # - Optional: precomputed FreeSurfer outputs in /data/output/fs_outputs
+        if tool_args:
+            cmd += f" {tool_args}"
+        return cmd
         
-        meld_data_dir = options.get('meld_data_dir', '')
-        fs_license = options.get('fs_license', '/opt/freesurfer/.license')
-        participant_label = options['participant_label']
-        harmo_code = options.get('harmo_code', '')
-        demographics = options.get('demographics', '')
-        skip_feature_extraction = options.get('skip_feature_extraction', False)
-        harmonize = options.get('harmonize', False)
-        use_gpu = options.get('use_gpu', True)  # GPU usage control
-        gpu_memory_limit = options.get('gpu_memory_limit', 128)  # GPU memory split size in MB
-        
-        # Build the base command
-        cmd_parts = [
-            f"apptainer exec",
-        ]
-        
-        # Add GPU support with memory management if requested
-        if use_gpu:
-            cmd_parts.append(f"--nv")  # Enable NVIDIA GPU support for inference
-        
-        cmd_parts.extend([
-            f"-B {meld_data_dir}:/data",
-            f"-B {fs_license}:/license.txt:ro",
-            f"--env FS_LICENSE=/license.txt",
-        ])
-        
-        # Add PyTorch memory management environment variables
-        if use_gpu:
-            # Help PyTorch manage GPU memory fragmentation and limit cache
-            # max_split_size_mb: reduces fragmentation by splitting allocations
-            cmd_parts.extend([
-                f"--env PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:{gpu_memory_limit}",
-                f"--env CUDA_LAUNCH_BLOCKING=1",  # Synchronous execution to catch errors early
-            ])
-        else:
-            # Force CPU inference by hiding GPU from CUDA
-            cmd_parts.append(f"--env CUDA_VISIBLE_DEVICES=")
-        
-        # Add FreeSurfer outputs bind if using precomputed
-        # Note: Must be read-write because MELD needs to copy fsaverage_sym template
-        # and create intermediate files during feature extraction
-        fs_subjects_dir = options.get('fs_subjects_dir', '')
-        if fs_subjects_dir:
-            cmd_parts.append(f"-B {fs_subjects_dir}:/data/output/fs_outputs")
-        
-        cmd_parts.append(f"{options['apptainer_img']}")
-        cmd_parts.append("/bin/bash -c 'cd /app &&")
-        
-        # Build the Python command
-        python_cmd = "python scripts/new_patient_pipeline/new_pt_pipeline.py"
-        python_args = []
-        
-        # Add participant ID
-        if isinstance(participant_label, list):
-            # Multiple subjects - create temp file list
-            python_args.append(f"-ids /data/subjects_list.txt")
-        else:
-            python_args.append(f"-id sub-{participant_label}")
-        
-        # Add harmonization code if provided
-        if harmo_code:
-            python_args.append(f"-harmo_code {harmo_code}")
-        
-        # Add demographics file if provided (for harmonization)
-        if demographics:
-            python_args.append(f"-demos /data/{Path(demographics).name}")
-        
-        # Add flags
-        # NOTE: When using precomputed FreeSurfer outputs:
-        # - MELD will automatically detect them at /data/output/fs_outputs/sub-{id}/
-        # - MELD will skip running recon-all (segmentation) automatically
-        # - MELD still needs to run feature extraction to create .sm3.mgh files
-        # - Only add --skip_feature_extraction if those features already exist
-        #   from a previous MELD run (user explicitly requested --skip-feature-extraction
-        #   for re-running without re-computing features)
-        if skip_feature_extraction and not harmonize:
-            # Only skip feature extraction for non-harmonization runs
-            # where features were already created
-            python_args.append("--skip_feature_extraction")
-        # For harmonization: never skip feature extraction (always need fresh features)
-        
-        if harmonize:
-            python_args.append("--harmo_only")
-        
-        # Add any additional options
-        additional = options.get('additional_options', '')
-        if additional:
-            python_args.append(additional)
-        
-        full_cmd = f"{python_cmd} {' '.join(python_args)}'"
-        cmd_parts.append(full_cmd)
-        
-        return " ".join(cmd_parts)
-    
     elif tool == "fastsurfer":
-        # FastSurfer deep-learning based brain segmentation and surface reconstruction
-        # Docker image: deepmi/fastsurfer
-        # Documentation: https://github.com/Deep-MI/FastSurfer
-        
         if "fs_license" not in options:
             raise ValueError("FreeSurfer license file path is required for FastSurfer")
         
@@ -630,147 +531,80 @@ def build_apptainer_cmd(tool: str, **options) -> str:
         rawdata_host = Path(options['rawdata'])
         t1w_host = Path(options['t1w'])
         
-        # Get relative path from rawdata to t1w file
         try:
             t1w_relative = t1w_host.relative_to(rawdata_host)
             t1w_container = f"/data/{t1w_relative}"
         except ValueError:
             t1w_container = str(t1w_host)
         
-        # Build base command with GPU support
-        # FastSurfer strongly benefits from GPU acceleration
-        device = options.get('device', 'auto')
-        nv_flag = "--nv" if device != 'cpu' else ""
+        # FastSurfer benefits from GPU, enable by default
+        cmd = (
+            f"apptainer exec --nv "
+            f"-B {options['fs_license']}:/fs_license/license.txt:ro "
+            f"-B {options['rawdata']}:/data:ro "
+            f"-B {options['derivatives']}:/output "
+            f"{options['apptainer_img']} "
+            f"/fastsurfer/run_fastsurfer.sh "
+            f"--sid {subject_id} "
+            f"--sd /output/{options['output_label']} "
+            f"--t1 {t1w_container} "
+            f"--fs_license /fs_license/license.txt"
+        )
+        if tool_args:
+            cmd += f" {tool_args}"
+        return cmd
         
+    elif tool == "meld_graph":
+        # MELD Graph for lesion detection
+        meld_data_dir = options.get('meld_data_dir', '')
+        fs_license = options.get('fs_license', '/opt/freesurfer/.license')
+        participant_label = options['participant_label']
+        
+        # Build the base command with GPU support
         cmd_parts = [
-            f"apptainer exec {nv_flag}",
-            f"-B {options['fs_license']}:/fs_license/license.txt:ro",
-            f"-B {options['rawdata']}:/data:ro",
-            f"-B {options['derivatives']}:/output",
-            f"{options['apptainer_img']}",
-            f"/fastsurfer/run_fastsurfer.sh",
-            f"--sid {subject_id}",
-            f"--sd /output/{options['output_label']}",
-            f"--t1 {t1w_container}",
-            f"--fs_license /fs_license/license.txt",
+            "apptainer exec --nv",
+            f"-B {meld_data_dir}:/data",
+            f"-B {fs_license}:/license.txt:ro",
+            "--env FS_LICENSE=/license.txt",
         ]
         
-        # Add processing mode flags
-        if options.get('seg_only', False):
-            cmd_parts.append("--seg_only")
-        elif options.get('surf_only', False):
-            cmd_parts.append("--surf_only")
+        # Add FreeSurfer outputs bind if using precomputed
+        fs_subjects_dir = options.get('fs_subjects_dir', '')
+        if fs_subjects_dir:
+            cmd_parts.append(f"-B {fs_subjects_dir}:/data/output/fs_outputs")
         
-        # Add 3T atlas flag
-        if options.get('three_tesla', False):
-            cmd_parts.append("--3T")
+        cmd_parts.append(f"{options['apptainer_img']}")
         
-        # Add threads
-        threads = options.get('threads', 4)
-        cmd_parts.append(f"--threads {threads}")
+        # Build the Python command
+        subject_arg = f"-id sub-{participant_label}"
+        cmd_parts.append(f"/bin/bash -c 'cd /app && python scripts/new_patient_pipeline/new_pt_pipeline.py {subject_arg}")
         
-        # Add device specification
-        if device and device != 'auto':
-            cmd_parts.append(f"--device {device}")
+        if tool_args:
+            cmd_parts[-1] = cmd_parts[-1] + f" {tool_args}"
         
-        # Add voxel size
-        vox_size = options.get('vox_size', 'min')
-        if vox_size:
-            cmd_parts.append(f"--vox_size {vox_size}")
-        
-        # Add optional module flags
-        if options.get('no_cereb', False):
-            cmd_parts.append("--no_cereb")
-        
-        if options.get('no_hypothal', False):
-            cmd_parts.append("--no_hypothal")
-        
-        if options.get('no_biasfield', False):
-            cmd_parts.append("--no_biasfield")
-        
-        # Add T2 image if provided (for hypothalamus segmentation)
-        t2_path = options.get('t2')
-        if t2_path:
-            t2_host = Path(t2_path)
-            try:
-                t2_relative = t2_host.relative_to(rawdata_host)
-                t2_container = f"/data/{t2_relative}"
-            except ValueError:
-                t2_container = str(t2_host)
-            cmd_parts.append(f"--t2 {t2_container}")
+        cmd_parts[-1] = cmd_parts[-1] + "'"
         
         return " ".join(cmd_parts)
-    
+        
     elif tool == "cvrmap":
         # CVRmap for cerebrovascular reactivity mapping
-        # Docker image: ln2t/cvrmap
-        # Documentation: https://github.com/arovai/cvrmap
-        # Requires fMRIPrep preprocessed data as input
-        
         fmriprep_dir = options.get('fmriprep_dir', '')
         if not fmriprep_dir:
             raise ValueError("fmriprep_dir is required for CVRmap")
         
-        # Build base command
-        # CVRmap expects --derivatives in format: fmriprep=/path/to/fmriprep
-        # We bind fmriprep_dir to /fmriprep in the container
-        cmd_parts = [
-            f"apptainer run",
-            f"-B {options['rawdata']}:/data:ro",
-            f"-B {options['derivatives']}:/derivatives",
-            f"-B {fmriprep_dir}:/fmriprep:ro",
-            f"{options['apptainer_img']}",
-            f"/data /derivatives/{options['output_label']} participant",
-            f"--participant-label {options['participant_label']}",
-            f"--derivatives fmriprep=/fmriprep",
-        ]
-        
-        # Add task if specified (CVRmap auto-discovers if not provided)
-        task = options.get('task', '')
-        if task:
-            cmd_parts.append(f"--task {task}")
-        
-        # Add optional space specification
-        space = options.get('space', '')
-        if space:
-            cmd_parts.append(f"--space {space}")
-        
-        # Add baseline method
-        baseline_method = options.get('baseline_method', '')
-        if baseline_method:
-            cmd_parts.append(f"--baseline-method {baseline_method}")
-        
-        # Add ROI probe options
-        if options.get('roi_probe', False):
-            cmd_parts.append("--roi-probe")
-            
-            roi_coordinates = options.get('roi_coordinates', '')
-            if roi_coordinates:
-                cmd_parts.append(f"--roi-coordinates {roi_coordinates}")
-            
-            roi_radius = options.get('roi_radius', '')
-            if roi_radius:
-                cmd_parts.append(f"--roi-radius {roi_radius}")
-        
-        # Add parallelization options
-        n_jobs = options.get('n_jobs', 1)
-        if n_jobs and n_jobs != 1:
-            cmd_parts.append(f"--n-jobs {n_jobs}")
-        
-        # Add config file if provided
-        config = options.get('config', '')
-        if config:
-            config_path = Path(config)
-            # Bind config file directory and reference container path
-            cmd_parts.insert(-6, f"-B {config_path.parent}:/config:ro")
-            cmd_parts.append(f"--config /config/{config_path.name}")
-        
-        # Add any additional options
-        additional = options.get('additional_options', '')
-        if additional:
-            cmd_parts.append(additional)
-        
-        return " ".join(cmd_parts)
+        cmd = (
+            f"apptainer run "
+            f"-B {options['rawdata']}:/data:ro "
+            f"-B {options['derivatives']}:/derivatives "
+            f"-B {fmriprep_dir}:/fmriprep:ro "
+            f"{options['apptainer_img']} "
+            f"/data /derivatives/{options['output_label']} participant "
+            f"--participant-label {options['participant_label']} "
+            f"--derivatives fmriprep=/fmriprep"
+        )
+        if tool_args:
+            cmd += f" {tool_args}"
+        return cmd
     
     else:
         raise ValueError(f"Unsupported tool: {tool}")

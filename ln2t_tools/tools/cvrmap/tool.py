@@ -66,79 +66,38 @@ Typical runtime: 10-30 minutes per subject
     
     @classmethod
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
-        """Add CVRmap-specific CLI arguments."""
-        parser.add_argument(
-            "--task",
-            type=str,
-            default=None,
-            help="Task name for CVR analysis (e.g., 'gas', 'breathhold', 'rest'). "
-                 "If not specified, CVRmap will auto-discover available tasks."
-        )
-        parser.add_argument(
-            "--fmriprep-version",
-            type=str,
-            default=DEFAULT_CVRMAP_FMRIPREP_VERSION,
-            help=f"fMRIPrep version to use as input (default: {DEFAULT_CVRMAP_FMRIPREP_VERSION})"
-        )
-        parser.add_argument(
-            "--space",
-            type=str,
-            default="MNI152NLin2009cAsym",
-            help="Output space for CVR maps (default: MNI152NLin2009cAsym)"
-        )
-        parser.add_argument(
-            "--baseline-method",
-            type=str,
-            choices=["peakutils", "mean"],
-            default="peakutils",
-            help="Baseline computation method: 'peakutils' for gas challenges, "
-                 "'mean' for resting-state (default: peakutils)"
-        )
-        parser.add_argument(
-            "--n-jobs",
-            type=int,
-            default=-1,
-            help="Number of parallel jobs (-1 = all CPUs, default: -1)"
-        )
-        parser.add_argument(
-            "--roi-probe",
-            action="store_true",
-            help="Use ROI-based probe instead of physiological recordings"
-        )
-        parser.add_argument(
-            "--roi-coordinates",
-            type=float,
-            nargs=3,
-            metavar=("X", "Y", "Z"),
-            help="ROI center coordinates in mm (e.g., 0 -52 26 for PCC)"
-        )
-        parser.add_argument(
-            "--roi-radius",
-            type=float,
-            default=6.0,
-            help="ROI radius in mm (default: 6.0)"
-        )
-        parser.add_argument(
-            "--roi-mask",
-            type=Path,
-            help="Path to ROI mask file (alternative to coordinates)"
-        )
-        parser.add_argument(
-            "--config",
-            type=Path,
-            help="Path to custom YAML configuration file"
-        )
-        parser.add_argument(
-            "--debug-level",
-            type=int,
-            choices=[0, 1],
-            default=0,
-            help="Verbosity level: 0=info, 1=debug (default: 0)"
-        )
+        """Add CVRmap-specific CLI arguments.
+        
+        NOTE: Tool-specific arguments are now passed via --tool-args.
+        This method is kept for compatibility but adds no arguments.
+        
+        CVRmap accepts the following arguments via --tool-args:
+        
+        Data selection:
+          --task TASK             Task name (e.g., 'gas', 'breathhold', 'rest')
+          --fmriprep-version VER  fMRIPrep version to use as input
+          --space SPACE           Output space (default: MNI152NLin2009cAsym)
+          
+        Analysis options:
+          --baseline-method METHOD  'peakutils' or 'mean' (default: peakutils)
+          --n-jobs N                Parallel jobs (-1 = all CPUs)
+          --config FILE             Custom YAML configuration
+          --debug-level N           Verbosity: 0=info, 1=debug
+          
+        ROI probe options:
+          --roi-probe               Use ROI-based probe instead of physio
+          --roi-coordinates X Y Z   ROI center in mm (e.g., 0 -52 26)
+          --roi-radius R            ROI radius in mm (default: 6.0)
+          --roi-mask FILE           ROI mask file (alternative to coordinates)
+        """
+        pass  # Tool-specific args now passed via --tool-args
     
     @classmethod
     def validate_args(cls, args: argparse.Namespace) -> bool:
         """Validate CVRmap arguments.
+        
+        With the --tool-args pattern, validation is handled by the container.
+        This method simply returns True.
         
         Parameters
         ----------
@@ -148,31 +107,8 @@ Typical runtime: 10-30 minutes per subject
         Returns
         -------
         bool
-            True if arguments are valid
+            True (container handles validation)
         """
-        # Validate ROI probe options
-        if getattr(args, 'roi_probe', False):
-            has_coords = getattr(args, 'roi_coordinates', None) is not None
-            has_mask = getattr(args, 'roi_mask', None) is not None
-            
-            if not has_coords and not has_mask:
-                logger.error(
-                    "--roi-probe requires either --roi-coordinates or --roi-mask"
-                )
-                return False
-            
-            if has_coords and has_mask:
-                logger.warning(
-                    "Both --roi-coordinates and --roi-mask provided; "
-                    "using --roi-mask"
-                )
-        
-        # Check config file exists if provided
-        config = getattr(args, 'config', None)
-        if config and not config.exists():
-            logger.error(f"Configuration file not found: {config}")
-            return False
-        
         return True
     
     @classmethod
@@ -182,7 +118,10 @@ Typical runtime: 10-30 minutes per subject
         participant_label: str,
         args: argparse.Namespace
     ) -> bool:
-        """Check if fMRIPrep preprocessed data exists.
+        """Check if BOLD data exists for this participant.
+        
+        With --tool-args pattern, detailed validation is handled by the container.
+        This method just checks for any BOLD data.
         
         Parameters
         ----------
@@ -198,10 +137,7 @@ Typical runtime: 10-30 minutes per subject
         bool
             True if requirements are met
         """
-        # Check for functional data (with specific task if provided)
-        task = getattr(args, 'task', None)
-        
-        # Build query for BOLD files
+        # Check for functional data
         query_params = {
             'subject': participant_label,
             'suffix': 'bold',
@@ -209,21 +145,12 @@ Typical runtime: 10-30 minutes per subject
             'return_type': 'filename'
         }
         
-        if task:
-            query_params['task'] = task
-        
         bold_files = layout.get(**query_params)
         
         if not bold_files:
-            if task:
-                logger.warning(
-                    f"No BOLD data found for participant {participant_label} "
-                    f"with task '{task}'"
-                )
-            else:
-                logger.warning(
-                    f"No BOLD data found for participant {participant_label}"
-                )
+            logger.warning(
+                f"No BOLD data found for participant {participant_label}"
+            )
             return False
         
         return True
@@ -259,10 +186,10 @@ Typical runtime: 10-30 minutes per subject
         """
         version = args.version or cls.default_version
         output_label = args.output_label or f"cvrmap_{version}"
-        
+
         # Build subject directory
         subdir = f"sub-{participant_label}"
-        
+
         return dataset_derivatives / output_label / subdir
     
     @classmethod
@@ -305,21 +232,22 @@ Typical runtime: 10-30 minutes per subject
         version = args.version or cls.default_version
         output_label = args.output_label or f"cvrmap_{version}"
         
-        # Find fMRIPrep derivatives directory
-        fmriprep_version = getattr(args, 'fmriprep_version', DEFAULT_CVRMAP_FMRIPREP_VERSION)
-        fmriprep_dir = cls._find_fmriprep_dir(dataset_derivatives, fmriprep_version)
+        # Get tool_args from user
+        tool_args = getattr(args, 'tool_args', '') or ''
+        
+        # Find fMRIPrep derivatives directory (use default version)
+        fmriprep_dir = cls._find_fmriprep_dir(dataset_derivatives, DEFAULT_CVRMAP_FMRIPREP_VERSION)
         
         if not fmriprep_dir:
-            logger.error(
-                f"fMRIPrep derivatives not found in {dataset_derivatives}. "
-                f"Expected fmriprep_{fmriprep_version}. "
-                "Please run fMRIPrep first or specify --fmriprep-version."
+            logger.warning(
+                f"fMRIPrep derivatives not found at default location in {dataset_derivatives}. "
+                f"Specify --fmriprep-version via --tool-args if using a different version."
             )
-            return []
+            # Still continue - container will validate
+        else:
+            logger.info(f"Using fMRIPrep derivatives: {fmriprep_dir}")
         
-        logger.info(f"Using fMRIPrep derivatives: {fmriprep_dir}")
-        
-        # Build command using utility function
+        # Build command using utility function with tool_args pass-through
         cmd = build_apptainer_cmd(
             tool="cvrmap",
             rawdata=str(dataset_rawdata),
@@ -327,17 +255,8 @@ Typical runtime: 10-30 minutes per subject
             participant_label=participant_label,
             apptainer_img=apptainer_img,
             output_label=output_label,
-            fmriprep_dir=str(fmriprep_dir),
-            task=getattr(args, 'task', None),  # None = CVRmap auto-discovers
-            space=getattr(args, 'space', 'MNI152NLin2009cAsym'),
-            baseline_method=getattr(args, 'baseline_method', 'peakutils'),
-            n_jobs=getattr(args, 'n_jobs', -1),
-            debug_level=getattr(args, 'debug_level', 0),
-            roi_probe=getattr(args, 'roi_probe', False),
-            roi_coordinates=getattr(args, 'roi_coordinates', None),
-            roi_radius=getattr(args, 'roi_radius', 6.0),
-            roi_mask=getattr(args, 'roi_mask', None),
-            config=getattr(args, 'config', None),
+            fmriprep_dir=str(fmriprep_dir) if fmriprep_dir else None,
+            tool_args=tool_args
         )
         
         return [cmd] if isinstance(cmd, str) else cmd
@@ -412,7 +331,7 @@ Typical runtime: 10-30 minutes per subject
                 logger.info(f"Task: {task}")
             else:
                 logger.info("Task: auto-discover")
-            logger.info(f"Space: {args.space}")
+                # Space is now passed via --tool-args; cannot access as attribute
             launch_apptainer(cmd_str)
             return True
         except Exception as e:

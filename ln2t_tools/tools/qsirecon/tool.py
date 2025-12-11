@@ -56,32 +56,22 @@ NOTE: QSIRecon requires QSIPrep preprocessed data as input.
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
         """Add QSIRecon-specific CLI arguments.
         
-        Parameters
-        ----------
-        parser : argparse.ArgumentParser
-            The subparser for this tool
+        Tool-specific options should be passed via --tool-args.
+        This method is kept for backward compatibility but adds no arguments.
+        
+        Example usage with --tool-args:
+            ln2t_tools qsirecon --dataset MYDATA --participant-label 001 \\
+                --tool-args "--recon-spec mrtrix_multishell_msmt_ACT-hsvs"
+                
+        Common QSIRecon options (pass via --tool-args):
+            --recon-spec <spec>   : Reconstruction specification
+            --nprocs <n>          : Number of processes
+            --omp-nthreads <n>    : Number of OpenMP threads
+            
+        NOTE: QSIRecon requires QSIPrep preprocessed data. Use --output-label
+        to point to the correct QSIPrep version if needed.
         """
-        parser.add_argument(
-            "--qsiprep-version",
-            help=f"QSIPrep version to use as input (default: {DEFAULT_QSIPREP_VERSION})"
-        )
-        parser.add_argument(
-            "--recon-spec",
-            default="mrtrix_multishell_msmt_ACT-hsvs",
-            help="Reconstruction spec (default: mrtrix_multishell_msmt_ACT-hsvs)"
-        )
-        parser.add_argument(
-            "--nprocs",
-            type=int,
-            default=8,
-            help="Number of processes to use (default: 8)"
-        )
-        parser.add_argument(
-            "--omp-nthreads",
-            type=int,
-            default=8,
-            help="Number of OpenMP threads (default: 8)"
-        )
+        pass  # Tool-specific args now passed via --tool-args
     
     @classmethod
     def validate_args(cls, args: argparse.Namespace) -> bool:
@@ -129,17 +119,19 @@ NOTE: QSIRecon requires QSIPrep preprocessed data as input.
             logger.error("dataset_derivatives is required for QSIRecon requirement check")
             return False
         
-        qsiprep_version = getattr(args, 'qsiprep_version', None) or DEFAULT_QSIPREP_VERSION
-        qsiprep_dir = dataset_derivatives / f"qsiprep_{qsiprep_version}"
+        # Use default QSIPrep version for checking
+        # If user specifies different version via --tool-args, container will validate
+        qsiprep_dir = dataset_derivatives / f"qsiprep_{DEFAULT_QSIPREP_VERSION}"
         
         if not qsiprep_dir.exists():
-            logger.error(
-                f"QSIPrep output not found at: {qsiprep_dir}\n"
+            logger.warning(
+                f"QSIPrep output not found at default location: {qsiprep_dir}\n"
                 f"QSIRecon requires QSIPrep preprocessed data as input.\n"
-                f"Please run QSIPrep first, or specify the correct QSIPrep version with --qsiprep-version.\n"
+                f"If using a different QSIPrep version, specify via --tool-args.\n"
                 f"Expected QSIPrep output directory: {qsiprep_dir}"
             )
-            return False
+            # Return True anyway - container will perform full validation
+            return True
         
         # Check if participant exists in QSIPrep output
         participant_qsiprep_dir = qsiprep_dir / f"sub-{participant_label}"
@@ -223,7 +215,7 @@ NOTE: QSIRecon requires QSIPrep preprocessed data as input.
         """
         from ln2t_tools.utils.utils import build_apptainer_cmd
         
-        qsiprep_version = getattr(args, 'qsiprep_version', None) or DEFAULT_QSIPREP_VERSION
+        qsiprep_version = DEFAULT_QSIPREP_VERSION
         qsiprep_dir = dataset_derivatives / f"qsiprep_{qsiprep_version}"
         
         version = args.version or cls.default_version
@@ -233,6 +225,9 @@ NOTE: QSIRecon requires QSIPrep preprocessed data as input.
         
         logger.info(f"Using QSIPrep data from: {qsiprep_dir}")
         
+        # Get tool_args from user
+        tool_args = getattr(args, 'tool_args', '') or ''
+        
         cmd = build_apptainer_cmd(
             tool="qsirecon",
             fs_license=args.fs_license,
@@ -240,10 +235,7 @@ NOTE: QSIRecon requires QSIPrep preprocessed data as input.
             derivatives=str(output_dir),
             participant_label=participant_label,
             apptainer_img=apptainer_img,
-            recon_spec=getattr(args, 'recon_spec', 'mrtrix_multishell_msmt_ACT-hsvs'),
-            nprocs=getattr(args, 'nprocs', 8),
-            omp_nthreads=getattr(args, 'omp_nthreads', 8),
-            additional_options=getattr(args, 'additional_options', '')
+            tool_args=tool_args
         )
         
         return [cmd] if isinstance(cmd, str) else cmd
