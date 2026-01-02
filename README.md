@@ -1022,17 +1022,22 @@ The physio config file should be placed in your sourcedata directory:
 ~/sourcedata/{dataset}-sourcedata/physio/config.json
 ```
 
-If no config file is found in either location, the tool will use default values (DummyVolumes=5).
+Configuration file is **required** and must contain task-specific DummyVolumes definitions.
 
 Create a JSON configuration file with the following format:
 
 ```json
 {
-  "DummyVolumes": 5
+  "DummyVolumes": {
+    "task-rest": 5,
+    "task-motor_run-01": 3,
+    "task-motor_run-02": 4,
+    "_comment": "Specify dummy volumes for each task/run"
+  }
 }
 ```
 
-**DummyVolumes**: Number of dummy/discard volumes at the start of the fMRI acquisition. The StartTime will be calculated as:
+**DummyVolumes**: Map of task-specific dummy volumes. The StartTime will be calculated as:
 ```
 StartTime = -(30s + (TR × DummyVolumes))
 ```
@@ -1040,8 +1045,12 @@ StartTime = -(30s + (TR × DummyVolumes))
 Where:
 - 30s = GE scanner pre-recording period (hardcoded)
 - TR = Repetition time from fMRI JSON metadata
-- DummyVolumes = Number of dummy scans from config file
+- DummyVolumes = Number of dummy scans from config for that specific task/run
 - Negative sign indicates recording started BEFORE the first trigger
+
+Keys should match BIDS naming:
+- `"task-<taskname>"` for simple task names
+- `"task-<taskname>_run-<runnum>"` for multiple runs
 
 Example: If TR=2.0s and DummyVolumes=5:
 ```

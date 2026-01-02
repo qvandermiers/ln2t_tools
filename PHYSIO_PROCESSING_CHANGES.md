@@ -1,5 +1,58 @@
 # Physiological Data Processing Changes
 
+## Breaking Changes - DummyVolumes Configuration Refactoring
+
+### ⚠️ Configuration File Format Changed
+
+**Date**: January 2, 2026
+
+The physio configuration file format has been refactored to use **task-specific DummyVolumes only** (no global default).
+
+#### Old Format (DEPRECATED):
+```json
+{
+  "DummyVolumes": 5,
+  "DummyVolumesPerTask": {
+    "task-rest": 5,
+    "task-motor_run-01": 3
+  }
+}
+```
+
+#### New Format (REQUIRED):
+```json
+{
+  "DummyVolumes": {
+    "task-rest": 5,
+    "task-motor_run-01": 3,
+    "task-motor_run-02": 4
+  }
+}
+```
+
+#### Migration Guide
+
+1. **Remove** the global `"DummyVolumes": <integer>` field
+2. **Rename** `"DummyVolumesPerTask"` to `"DummyVolumes"`
+3. **Ensure** all tasks/runs in your dataset have entries
+4. **Update** all physio config files before running import
+
+#### Behavior Changes
+
+- **Before**: Missing task in config would use default (DummyVolumes=5)
+- **After**: Missing task in config will cause import to fail with clear error message
+- **Rationale**: Explicit configuration prevents silent errors from missing task definitions
+
+#### Error Messages
+
+If a task is not found in the new config format:
+```
+KeyError: Task 'motor' (with run='02') not found in DummyVolumes config. 
+Available: task-motor_run-01, task-rest
+```
+
+---
+
 ## Summary
 
 Modified the physiological data import functionality to use **in-house processing by default** instead of phys2bids. The phys2bids option is still available via the `--phys2bids` flag.
@@ -34,7 +87,7 @@ StartTime = -(30s + (TR × DummyVolumes))
 Where:
 - 30s = GE scanner pre-recording period (hardcoded)
 - TR = From fMRI JSON metadata
-- DummyVolumes = From configuration file
+- DummyVolumes = From configuration file (task-specific)
 - Negative sign indicates recording started BEFORE the first trigger
 
 ### 3. Updated Main Physio Module (`import_data/physio.py`)

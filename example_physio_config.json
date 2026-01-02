@@ -1,14 +1,11 @@
 {
-  "DummyVolumes": 5,
-  "DummyVolumesPerTask": {
-    "_comment": "Override DummyVolumes for specific task/run combinations",
-    "_example_task-rest": 5,
-    "_example_task-motor_run-01": 3,
-    "_example_task-motor_run-02": 4
+  "DummyVolumes": {
+    "task-rest": 5,
+    "task-motor_run-01": 3,
+    "task-motor_run-02": 4,
+    "_comment": "Specify DummyVolumes (number of dummy scans) for each task or task/run combination"
   },
-  "_comment": "Configuration for in-house physiological data processing",
   "_description": {
-    "DummyVolumes": "Default number of dummy volumes at the start of fMRI acquisition. StartTime will be calculated as: 30s + (TR × DummyVolumes)",
-    "DummyVolumesPerTask": "Optional: Override DummyVolumes for specific task or task/run combinations. Keys should match BIDS naming: 'task-<taskname>' or 'task-<taskname>_run-<runnum>'"
+    "DummyVolumes": "Map of task-specific dummy volumes. Keys should match BIDS naming: 'task-<taskname>' or 'task-<taskname>_run-<runnum>'. StartTime will be calculated as: -(30s + TR × DummyVolumes)"
   }
 }

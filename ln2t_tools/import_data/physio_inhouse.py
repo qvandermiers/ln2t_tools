@@ -31,7 +31,8 @@ def load_physio_config(config_path: Optional[Path] = None, sourcedata_dir: Optio
     1. Explicit config_path if provided
     2. sourcedata_dir/configs/physio.json
     3. sourcedata_dir/physio/config.json
-    4. Default values (DummyVolumes=5)
+    
+    Configuration must contain 'DummyVolumes' dict with task-specific values.
     
     Parameters
     ----------
@@ -43,7 +44,14 @@ def load_physio_config(config_path: Optional[Path] = None, sourcedata_dir: Optio
     Returns
     -------
     Dict
-        Configuration dictionary with at least 'DummyVolumes' field
+        Configuration dictionary with 'DummyVolumes' dict (task-specific values required)
+        
+    Raises
+    ------
+    FileNotFoundError
+        If config file is not found and sourcedata_dir is provided
+    ValueError
+        If 'DummyVolumes' field is missing or not a dictionary
     """
     # Try explicit path first
     if config_path is not None:
@@ -64,18 +72,21 @@ def load_physio_config(config_path: Optional[Path] = None, sourcedata_dir: Optio
         if config_path.exists():
             logger.info(f"Using physio config: {config_path}")
         else:
-            logger.warning(
-                f"No physio config file found. Searched:\n"
+            logger.error(
+                f"Physio config file not found. Searched:\n"
                 f"  {sourcedata_dir}/configs/physio.json\n"
                 f"  {sourcedata_dir}/physio/config.json\n"
-                f"Using default DummyVolumes=5"
+                f"DummyVolumes configuration is required for physio import."
             )
-            return {'DummyVolumes': 5}
+            raise FileNotFoundError(
+                f"Physio config file not found in {sourcedata_dir}. "
+                "Must contain DummyVolumes dict with task-specific values."
+            )
     
     # No path and no sourcedata_dir
     else:
-        logger.warning("No physio config file provided, using default DummyVolumes=5")
-        return {'DummyVolumes': 5}
+        logger.error("No physio config file provided and no sourcedata_dir specified")
+        raise FileNotFoundError("Physio config file path must be provided")
     
     # Load the config file
     try:
@@ -83,16 +94,24 @@ def load_physio_config(config_path: Optional[Path] = None, sourcedata_dir: Optio
             config = json.load(f)
         
         if 'DummyVolumes' not in config:
-            logger.warning("'DummyVolumes' not found in config, using default value 5")
-            config['DummyVolumes'] = 5
+            logger.error("'DummyVolumes' field not found in config")
+            raise ValueError("Configuration must contain 'DummyVolumes' dict")
         
-        logger.info(f"Loaded config: DummyVolumes = {config['DummyVolumes']}")
+        # Validate DummyVolumes is a dictionary
+        if not isinstance(config['DummyVolumes'], dict):
+            logger.error(f"'DummyVolumes' must be a dictionary, got {type(config['DummyVolumes'])}")
+            raise ValueError("'DummyVolumes' must be a dictionary with task-specific values")
         
-        # Log per-task overrides if present
-        if 'DummyVolumesPerTask' in config:
-            overrides = {k: v for k, v in config['DummyVolumesPerTask'].items() if not k.startswith('_')}
-            if overrides:
-                logger.info(f"Per-task DummyVolumes overrides: {overrides}")
+        # Filter out comment/metadata keys
+        task_volumes = {k: v for k, v in config['DummyVolumes'].items() if not k.startswith('_')}
+        
+        if not task_volumes:
+            logger.error("'DummyVolumes' dictionary is empty (contains only comment keys)")
+            raise ValueError("'DummyVolumes' must contain at least one task definition")
+        
+        logger.info(f"Loaded config with {len(task_volumes)} task definitions")
+        for task_key, volumes in sorted(task_volumes.items()):
+            logger.info(f"  {task_key}: {volumes} dummy volumes")
         
         return config
         
@@ -104,10 +123,9 @@ def load_physio_config(config_path: Optional[Path] = None, sourcedata_dir: Optio
 def get_dummy_volumes_for_task(config: Dict, task: str, run: Optional[str] = None) -> int:
     """Get the DummyVolumes value for a specific task/run combination.
     
-    Looks up per-task overrides in the following order:
+    Looks up the task in the DummyVolumes configuration in this order:
     1. task-<taskname>_run-<runnum> (most specific)
-    2. task-<taskname> (task-level override)
-    3. Default DummyVolumes value
+    2. task-<taskname> (task-level definition)
     
     Parameters
     ----------
@@ -122,33 +140,41 @@ def get_dummy_volumes_for_task(config: Dict, task: str, run: Optional[str] = Non
     -------
     int
         Number of dummy volumes for this task/run
+        
+    Raises
+    ------
+    KeyError
+        If task/run combination is not found in DummyVolumes config
     """
-    default_dummy = config.get('DummyVolumes', 5)
-    per_task = config.get('DummyVolumesPerTask', {})
+    dummy_volumes_config = config.get('DummyVolumes', {})
     
-    # Filter out comment/example keys
-    per_task = {k: v for k, v in per_task.items() if not k.startswith('_')}
+    # Filter out comment/metadata keys (starting with _)
+    task_config = {k: v for k, v in dummy_volumes_config.items() if not k.startswith('_')}
     
-    if not per_task:
-        return default_dummy
+    if not task_config:
+        raise ValueError("DummyVolumes configuration is empty (contains only comment keys)")
     
     # Try most specific first: task-<task>_run-<run>
     if run is not None:
         key_with_run = f"task-{task}_run-{run}"
-        if key_with_run in per_task:
-            dummy = per_task[key_with_run]
-            logger.info(f"Using per-task DummyVolumes={dummy} for {key_with_run}")
+        if key_with_run in task_config:
+            dummy = task_config[key_with_run]
+            logger.info(f"Using DummyVolumes={dummy} for {key_with_run}")
             return dummy
     
     # Try task-level: task-<task>
     key_task_only = f"task-{task}"
-    if key_task_only in per_task:
-        dummy = per_task[key_task_only]
-        logger.info(f"Using per-task DummyVolumes={dummy} for {key_task_only}")
+    if key_task_only in task_config:
+        dummy = task_config[key_task_only]
+        logger.info(f"Using DummyVolumes={dummy} for {key_task_only}")
         return dummy
     
-    # Fall back to default
-    return default_dummy
+    # Task not found - raise error
+    available_tasks = ', '.join(sorted(task_config.keys()))
+    raise KeyError(
+        f"Task '{task}' (with run='{run}') not found in DummyVolumes config. "
+        f"Available: {available_tasks}"
+    )
 
 
 def parse_physio_files(physio_dir: Path) -> List[Dict]:
@@ -475,7 +501,7 @@ def import_physio_inhouse(
     rawdata_dir : Path
         Path to BIDS rawdata directory
     config : Dict
-        Configuration dictionary (must contain 'DummyVolumes')
+        Configuration dictionary (must contain 'DummyVolumes' dict with task-specific values)
     ds_initials : Optional[str]
         Dataset initials prefix
     session : Optional[str]
@@ -498,15 +524,20 @@ def import_physio_inhouse(
     
     logger.info(f"Found physio directory: {physio_dir}")
     
-    # Log default DummyVolumes from config
-    default_dummy_volumes = config.get('DummyVolumes', 5)
-    logger.info(f"Default DummyVolumes = {default_dummy_volumes}")
+    # Validate DummyVolumes configuration (task-specific)
+    dummy_volumes_config = config.get('DummyVolumes', {})
+    if not isinstance(dummy_volumes_config, dict):
+        logger.error(f"Invalid DummyVolumes config: expected dict, got {type(dummy_volumes_config)}")
+        return False
     
-    # Log per-task overrides if present
-    per_task_overrides = config.get('DummyVolumesPerTask', {})
-    per_task_overrides = {k: v for k, v in per_task_overrides.items() if not k.startswith('_')}
-    if per_task_overrides:
-        logger.info(f"Per-task DummyVolumes overrides configured: {per_task_overrides}")
+    task_config = {k: v for k, v in dummy_volumes_config.items() if not k.startswith('_')}
+    if not task_config:
+        logger.error("DummyVolumes configuration is empty (no task definitions found)")
+        return False
+    
+    logger.info(f"Loaded DummyVolumes for {len(task_config)} task(s):")
+    for task_key, volumes in sorted(task_config.items()):
+        logger.info(f"  {task_key}: {volumes} dummy volumes")
     
     # If ds_initials not provided, try to infer
     if ds_initials is None:
