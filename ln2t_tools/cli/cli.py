@@ -89,18 +89,25 @@ def log_minimal(logger, message: str) -> None:
     logger.log(MINIMAL, message)
 
 
-def add_common_arguments(parser):
-    """Add arguments common to all tools."""
+def add_common_arguments(parser, exclude_participant_label=False):
+    """Add arguments common to all tools.
+    
+    Args:
+        parser: argparse parser to add arguments to
+        exclude_participant_label: If True, skip adding --participant-label argument
+                                   (for dataset-wide tools like bids_validator)
+    """
     parser.add_argument(
         "--dataset",
         help="BIDS dataset name (without -rawdata suffix)"
     )
     
-    parser.add_argument(
-        "--participant-label",
-        nargs='+',
-        help="One or more participant labels (without 'sub-' prefix)"
-    )
+    if not exclude_participant_label:
+        parser.add_argument(
+            "--participant-label",
+            nargs='+',
+            help="One or more participant labels (without 'sub-' prefix)"
+        )
     
     parser.add_argument(
         "--output-label",
@@ -271,6 +278,9 @@ def parse_args() -> argparse.Namespace:
     # Create subparsers for each tool
     subparsers = parser.add_subparsers(dest='tool', help='Neuroimaging tool to use')
 
+    # Dataset-wide tools that don't operate on individual participants
+    dataset_wide_tools = ['bids_validator']
+
     # Dynamically create subparsers from registered tools
     for tool_name, tool_class in get_all_tools().items():
         tool_parser = subparsers.add_parser(
@@ -280,9 +290,11 @@ def parse_args() -> argparse.Namespace:
             formatter_class=argparse.RawDescriptionHelpFormatter
         )
         # Add common arguments (dataset, participant, version, etc.)
-        add_common_arguments(tool_parser)
-        # Add HPC arguments for cluster submission
-        add_hpc_arguments(tool_parser)
+        # For dataset-wide tools, exclude --participant-label
+        add_common_arguments(tool_parser, exclude_participant_label=(tool_name in dataset_wide_tools))
+        # Add HPC arguments for cluster submission (not for dataset-wide tools)
+        if tool_name not in dataset_wide_tools:
+            add_hpc_arguments(tool_parser)
         # NOTE: Tool-specific arguments are NO LONGER added here.
         # Instead, users should use --tool-args to pass any tool-specific
         # options directly to the container. This decouples ln2t_tools

@@ -1832,6 +1832,28 @@ def main(args=None) -> None:
                             # Skip local processing - jobs are on HPC
                             continue
 
+                        # Dataset-wide tools (like bids_validator) run once per dataset, not per participant
+                        dataset_wide_tools = ["bids_validator"]
+                        
+                        if tool in dataset_wide_tools:
+                            # Process dataset-wide tool once
+                            log_minimal(logger, f"Running {tool} on entire dataset {dataset}")
+                            try:
+                                if tool == "bids_validator":
+                                    BidsValidatorTool.process_subject(
+                                        layout=layout,
+                                        participant_label=None,  # No specific participant
+                                        args=args,
+                                        dataset_rawdata=dataset_rawdata,
+                                        dataset_derivatives=dataset_derivatives,
+                                        apptainer_img=apptainer_img
+                                    )
+                                log_minimal(logger, f"✓ Successfully ran {tool} on dataset {dataset}")
+                            except Exception as e:
+                                logger.error(f"Error running {tool} on dataset {dataset}: {str(e)}")
+                                dataset_success = False
+                            continue  # Move to next tool
+
                         # Process each participant with this tool
                         for participant_label in participant_list:
                             log_minimal(logger, f"Processing participant {participant_label} with {tool}")
@@ -1894,15 +1916,6 @@ def main(args=None) -> None:
                                     )
                                 elif tool == "cvrmap":
                                     CvrMapTool.process_subject(
-                                        layout=layout,
-                                        participant_label=participant_label,
-                                        args=args,
-                                        dataset_rawdata=dataset_rawdata,
-                                        dataset_derivatives=dataset_derivatives,
-                                        apptainer_img=apptainer_img
-                                    )
-                                elif tool == "bids_validator":
-                                    BidsValidatorTool.process_subject(
                                         layout=layout,
                                         participant_label=participant_label,
                                         args=args,

@@ -298,9 +298,6 @@ The BIDS Validator checks datasets for compliance with the Brain Imaging Data St
 ```bash
 # Validate entire dataset
 ln2t_tools bids_validator --dataset mydataset
-
-# Validate specific participant's data
-ln2t_tools bids_validator --dataset mydataset --participant-label 01
 ```
 
 #### Advanced Options
@@ -321,7 +318,8 @@ ln2t_tools bids_validator --dataset mydataset \
 ```
 
 **Notes**:
-- Unlike other tools, BIDS Validator operates on the entire dataset rather than individual participants
+- BIDS Validator operates on the entire dataset, not individual participants
+- The `--participant-label` option is NOT available for this tool
 - The tool returns non-zero exit codes when validation errors are found
 - Use `--tool-args "--json"` for machine-readable output that can be piped to other tools
 

@@ -45,7 +45,7 @@ Data Structure (BIDS) specification. It validates:
 
 Usage notes:
   - This tool validates the entire dataset, not individual subjects
-  - Use --participant-label to validate a specific subject's data only
+  - The --participant-label option is NOT available for this tool
   - Additional options can be passed via --tool-args
 
 Common options (pass via --tool-args):
@@ -93,20 +93,19 @@ Typical runtime: A few seconds to minutes depending on dataset size
     def check_requirements(
         cls,
         layout: BIDSLayout,
-        participant_label: str,
+        participant_label: Optional[str],
         args: argparse.Namespace
     ) -> bool:
         """Check if requirements are met to run BIDS validation.
         
         For BIDS Validator, we only need the dataset to exist.
-        The participant_label is optional for this tool.
         
         Parameters
         ----------
         layout : BIDSLayout
             BIDS dataset layout
-        participant_label : str
-            Participant ID (without 'sub-' prefix) - optional for this tool
+        participant_label : Optional[str]
+            Not used - BIDS Validator operates on entire dataset
         args : argparse.Namespace
             Parsed command line arguments
             
@@ -120,20 +119,13 @@ Typical runtime: A few seconds to minutes depending on dataset size
             logger.warning("No valid BIDS dataset found")
             return False
         
-        # If a participant label is specified, check they exist
-        if participant_label:
-            subjects = layout.get_subjects()
-            if participant_label not in subjects:
-                logger.warning(f"Participant {participant_label} not found in dataset")
-                return False
-        
         return True
     
     @classmethod
     def get_output_dir(
         cls,
         dataset_derivatives: Path,
-        participant_label: str,
+        participant_label: Optional[str],
         args: argparse.Namespace,
         session: Optional[str] = None,
         run: Optional[str] = None
@@ -147,8 +139,8 @@ Typical runtime: A few seconds to minutes depending on dataset size
         ----------
         dataset_derivatives : Path
             Base derivatives directory
-        participant_label : str
-            Participant ID (without 'sub-' prefix)
+        participant_label : Optional[str]
+            Not used - BIDS Validator operates on entire dataset
         args : argparse.Namespace
             Parsed command line arguments
         session : Optional[str]
@@ -170,7 +162,7 @@ Typical runtime: A few seconds to minutes depending on dataset size
     def build_command(
         cls,
         layout: BIDSLayout,
-        participant_label: str,
+        participant_label: Optional[str],
         args: argparse.Namespace,
         dataset_rawdata: Path,
         dataset_derivatives: Path,
@@ -183,8 +175,8 @@ Typical runtime: A few seconds to minutes depending on dataset size
         ----------
         layout : BIDSLayout
             BIDS dataset layout
-        participant_label : str
-            Participant ID (without 'sub-' prefix) - optional
+        participant_label : Optional[str]
+            Not used - BIDS Validator operates on entire dataset
         args : argparse.Namespace
             Parsed command line arguments
         dataset_rawdata : Path
@@ -209,7 +201,6 @@ Typical runtime: A few seconds to minutes depending on dataset size
         cmd = build_apptainer_cmd(
             tool="bids_validator",
             rawdata=str(dataset_rawdata),
-            participant_label=participant_label,
             apptainer_img=apptainer_img,
             tool_args=tool_args
         )
@@ -220,7 +211,7 @@ Typical runtime: A few seconds to minutes depending on dataset size
     def process_subject(
         cls,
         layout: BIDSLayout,
-        participant_label: str,
+        participant_label: Optional[str],
         args: argparse.Namespace,
         dataset_rawdata: Path,
         dataset_derivatives: Path,
@@ -229,16 +220,15 @@ Typical runtime: A few seconds to minutes depending on dataset size
     ) -> bool:
         """Run BIDS validation on the dataset.
         
-        Note: For BIDS Validator, this validates the entire dataset or
-        a specific participant if specified. It doesn't process subjects
-        in the traditional sense.
+        Note: For BIDS Validator, this validates the entire dataset.
+        It doesn't process individual subjects.
         
         Parameters
         ----------
         layout : BIDSLayout
             BIDS dataset layout
-        participant_label : str
-            Participant ID (without 'sub-' prefix) - optional
+        participant_label : Optional[str]
+            Not used - BIDS Validator operates on entire dataset
         args : argparse.Namespace
             Parsed command line arguments
         dataset_rawdata : Path
