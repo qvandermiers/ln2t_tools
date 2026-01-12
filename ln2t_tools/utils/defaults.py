@@ -23,6 +23,7 @@ DEFAULT_MELDGRAPH_VERSION = "v2.2.3"
 DEFAULT_MELD_FS_VERSION = "7.2.0"  # MELD Graph requires FreeSurfer 7.2.0 or earlier
 DEFAULT_CVRMAP_VERSION = "4.3.1"
 DEFAULT_CVRMAP_FMRIPREP_VERSION = "21.0.4"  # CVRmap uses fMRIPrep preprocessed data
+DEFAULT_BIDS_VALIDATOR_VERSION = "2.5.6"
 
 # FreeSurfer license
 DEFAULT_FS_LICENSE = Path("/opt/freesurfer/.license")

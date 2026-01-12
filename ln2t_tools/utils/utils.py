@@ -618,6 +618,18 @@ def build_apptainer_cmd(tool: str, **options) -> str:
             cmd += f" {tool_args}"
         return cmd
     
+    elif tool == "bids_validator":
+        # BIDS Validator for dataset validation
+        cmd = (
+            f"apptainer run "
+            f"-B {options['rawdata']}:/data:ro "
+            f"{options['apptainer_img']} "
+            f"/data"
+        )
+        if tool_args:
+            cmd += f" {tool_args}"
+        return cmd
+    
     else:
         raise ValueError(f"Unsupported tool: {tool}")
 

@@ -4,6 +4,7 @@ Useful tools for the LN2T
 ## Overview
 
 ln2t_tools is a neuroimaging pipeline manager that supports multiple processing tools:
+- **BIDS Validator**: Dataset validation and compliance checking ([official docs](https://bids-standard.github.io/bids-validator/))
 - **FreeSurfer**: Cortical reconstruction and surface-based analysis ([official docs](https://surfer.nmr.mgh.harvard.edu/))
 - **fMRIPrep**: Functional MRI preprocessing ([official docs](https://fmriprep.org/))
 - **QSIPrep**: Diffusion MRI preprocessing ([official docs](https://qsiprep.readthedocs.io/))
@@ -15,6 +16,7 @@ ln2t_tools is a neuroimaging pipeline manager that supports multiple processing 
 2. [Setup Requirements](#setup-requirements)
 3. [Quick Start](#quick-start)
 4. [Pipeline Usage Examples](#pipeline-usage-examples)
+   - [BIDS Validator](#bids-validator)
    - [FreeSurfer](#freesurfer)
    - [fMRIPrep](#fmriprep)
    - [QSIPrep](#qsiprep)
@@ -242,6 +244,20 @@ ln2t_tools meld_graph --dataset mydataset --participant-label 01 \
     --tool-args "--skip-feature-extraction"
 ```
 
+#### BIDS Validator
+```bash
+# Validate entire dataset
+ln2t_tools bids_validator --dataset mydataset
+
+# Output validation results as JSON
+ln2t_tools bids_validator --dataset mydataset \
+    --tool-args "--json"
+
+# Ignore warnings and NIfTI header validation
+ln2t_tools bids_validator --dataset mydataset \
+    --tool-args "--ignoreWarnings --ignoreNiftiHeaders"
+```
+
 #### CVRmap
 ```bash
 # Specific task with ROI probe
@@ -256,6 +272,7 @@ ln2t_tools cvrmap --dataset mydataset --participant-label 01 \
 ### Finding Available Options
 
 Each tool has its own documentation for available options:
+- **BIDS Validator**: `bids-validator --help` or [BIDS Validator Documentation](https://bids-standard.github.io/bids-validator/)
 - **FreeSurfer**: `recon-all --help` or [FreeSurfer Wiki](https://surfer.nmr.mgh.harvard.edu/fswiki/recon-all)
 - **FastSurfer**: [FastSurfer Documentation](https://deep-mi.org/research/fastsurfer/)
 - **fMRIPrep**: `fmriprep --help` or [fMRIPrep Documentation](https://fmriprep.org/en/stable/usage.html)
@@ -267,6 +284,48 @@ Each tool has its own documentation for available options:
 ---
 
 ## Pipeline Usage Examples
+
+### BIDS Validator
+
+The BIDS Validator checks datasets for compliance with the Brain Imaging Data Structure (BIDS) specification.
+
+#### Default Values
+- **Version**: `2.5.6`
+- **Container**: `bids/validator:v2.5.6`
+
+#### Basic Usage
+
+```bash
+# Validate entire dataset
+ln2t_tools bids_validator --dataset mydataset
+
+# Validate specific participant's data
+ln2t_tools bids_validator --dataset mydataset --participant-label 01
+```
+
+#### Advanced Options
+
+```bash
+# Use specific validator version
+ln2t_tools bids_validator --dataset mydataset --version 2.6.0
+
+# Output results in JSON format
+ln2t_tools bids_validator --dataset mydataset --tool-args "--json"
+
+# Ignore warnings (only report errors)
+ln2t_tools bids_validator --dataset mydataset --tool-args "--ignoreWarnings"
+
+# Verbose output with ignored NIfTI headers
+ln2t_tools bids_validator --dataset mydataset \
+    --tool-args "--verbose --ignoreNiftiHeaders"
+```
+
+**Notes**:
+- Unlike other tools, BIDS Validator operates on the entire dataset rather than individual participants
+- The tool returns non-zero exit codes when validation errors are found
+- Use `--tool-args "--json"` for machine-readable output that can be piped to other tools
+
+---
 
 ### FreeSurfer
 
