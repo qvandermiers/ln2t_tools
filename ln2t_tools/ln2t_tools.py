@@ -1688,8 +1688,9 @@ def main(args=None) -> None:
 
                 layout = BIDSLayout(dataset_rawdata)
                 
-                # Get participants to process
-                participant_list = args.participant_label if args.participant_label else []
+                # Get participants to process (use getattr for tools that don't have participant_label)
+                participant_label_arg = getattr(args, 'participant_label', None)
+                participant_list = participant_label_arg if participant_label_arg else []
                 participant_list = check_participants_exist(layout, participant_list)
 
                 logger.info(f"Processing {len(participant_list)} participants in dataset {dataset}")
