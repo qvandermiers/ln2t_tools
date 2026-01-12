@@ -372,17 +372,17 @@ by administrators in the rawdata directory.
     parser_import.add_argument(
         "--pre-import-tolerance-hours",
         type=float,
-        default=1.0,
-        help="Time tolerance in hours for finding source files by datetime during pre-import (default: 1.0). "
-             "Can also be set via PhysioPreImportTolerance in physio config file."
+        default=None,
+        help="Time tolerance in hours for finding source files by datetime during pre-import. "
+             "Default: 1.0, or value from PhysioPreImportTolerance in physio config file."
     )
     parser_import.add_argument(
         "--matching-tolerance-sec",
         type=float,
-        default=35.0,
-        help="Time tolerance in seconds for matching physio recordings to fMRI runs (default: 35.0). "
-             "GE physio starts 30s before fMRI, so 35s accounts for offset + timing variations. "
-             "Can also be set via PhysioMatchingTolerance in physio config file."
+        default=None,
+        help="Time tolerance in seconds for matching physio recordings to fMRI runs. "
+             "Default: 35.0, or value from PhysioMatchingTolerance in physio config file. "
+             "GE physio starts 30s before fMRI, so 35s accounts for offset + timing variations."
     )
     parser_import.add_argument(
         "--dry-run",
