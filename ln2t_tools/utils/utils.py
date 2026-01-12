@@ -241,6 +241,9 @@ def ensure_image_exists(
         tool_owner = "meldproject"
     elif tool == "cvrmap":
         tool_owner = "ln2t"
+    elif tool == "bids_validator":
+        tool_owner = "bids"
+        tool = "validator"  # Docker image is bids/validator
     else:
         raise ValueError(f"Unsupported tool: {tool}")
     

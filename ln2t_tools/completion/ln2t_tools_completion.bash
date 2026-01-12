@@ -5,7 +5,7 @@ _ln2t_tools_completion() {
     _init_completion || return
 
     # List of tools
-    local tools="freesurfer fastsurfer fmriprep qsiprep qsirecon meld_graph cvrmap import"
+    local tools="freesurfer fastsurfer fmriprep qsiprep qsirecon meld_graph cvrmap bids_validator import"
     
     # Function to get dataset name from command line
     _get_dataset_name() {
@@ -51,7 +51,7 @@ _ln2t_tools_completion() {
 
     # Handle options
     case $prev in
-        freesurfer|fastsurfer|fmriprep|qsiprep|qsirecon|meld_graph|cvrmap|import)
+        freesurfer|fastsurfer|fmriprep|qsiprep|qsirecon|meld_graph|cvrmap|bids_validator|import)
             COMPREPLY=( $(compgen -W "--dataset" -- "$cur") )
             return 0
             ;;
