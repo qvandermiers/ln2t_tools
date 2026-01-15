@@ -131,7 +131,7 @@ _ln2t_tools_completion() {
             
             # Add MRI2Print specific options
             if [[ ${words[1]} == "mri2print" ]]; then
-                opts+=" --decimation --skip-cortex --skip-subcortex --no-compress --cortex-iterations --subcortex-iterations"
+                opts+=" --fs-version --decimation --skip-cortex --skip-subcortex --no-compress --cortex-iterations --subcortex-iterations"
             fi
             
             # Add Import specific options

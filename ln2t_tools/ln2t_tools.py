@@ -1926,6 +1926,16 @@ def main(args=None) -> None:
                                         dataset_derivatives=dataset_derivatives,
                                         apptainer_img=apptainer_img
                                     )
+                                elif tool == "mri2print":
+                                    from ln2t_tools.tools.mri2print import TOOL_CLASS as Mri2PrintTool
+                                    Mri2PrintTool.process_subject(
+                                        layout=layout,
+                                        participant_label=participant_label,
+                                        args=args,
+                                        dataset_rawdata=dataset_rawdata,
+                                        dataset_derivatives=dataset_derivatives,
+                                        apptainer_img=apptainer_img
+                                    )
                                 log_minimal(logger, f"✓ Successfully processed participant {participant_label} with {tool}")
                             except Exception as e:
                                 logger.error(f"Error processing participant {participant_label} with {tool}: {str(e)}")

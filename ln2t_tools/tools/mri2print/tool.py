@@ -34,6 +34,11 @@ class Mri2PrintTool(BaseTool):
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
         """Add tool-specific CLI arguments."""
         parser.add_argument(
+            "--fs-version",
+            default=None,
+            help="FreeSurfer version to use for input data (default: auto-detect latest)"
+        )
+        parser.add_argument(
             "--decimation",
             type=int,
             default=10000000000,
@@ -114,11 +119,14 @@ class Mri2PrintTool(BaseTool):
     ) -> Path:
         """Get the output directory path for this participant."""
         version = args.version or cls.default_version
+        logger.debug(f"get_output_dir: args.version={args.version}, cls.default_version={cls.default_version}, using version={version}")
         subdir = f"sub-{participant_label}"
         if session:
             subdir = f"{subdir}_ses-{session}"
         
-        return dataset_derivatives / f"{cls.name}_{version}" / subdir
+        output_path = dataset_derivatives / f"{cls.name}_{version}" / subdir
+        logger.debug(f"get_output_dir: output_path={output_path}")
+        return output_path
     
     @classmethod
     def build_command(
@@ -136,34 +144,54 @@ class Mri2PrintTool(BaseTool):
         mri2print processes FreeSurfer outputs and generates 3D-printable STL meshes.
         """
         version = args.version or cls.default_version
+        logger.info(f"build_command: Using version {version}")
         output_dir = cls.get_output_dir(
             dataset_derivatives, participant_label, args
         )
         
         # Create output directory
         output_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"build_command: Created output directory {output_dir}")
         
-        # Find FreeSurfer output directory (typically freesurfer_*/sub-*)
-        # Look for the most recent/common FreeSurfer version
+        # Find FreeSurfer output directory
+        # User can specify a version with --fs-version, otherwise auto-detect
+        fs_version = getattr(args, 'fs_version', None)
+        
+        if fs_version:
+            # User specified a FreeSurfer version
+            fs_dir_pattern = f"freesurfer_{fs_version}"
+            logger.info(f"build_command: Looking for FreeSurfer version {fs_version}")
+        else:
+            # Auto-detect: look for any freesurfer_* directory
+            fs_dir_pattern = "freesurfer_*"
+            logger.info(f"build_command: Auto-detecting FreeSurfer version")
+        
         fs_parent = dataset_derivatives.parent
-        fs_dirs = sorted(fs_parent.glob("*freesurfer*"))
+        fs_dirs = sorted(fs_parent.glob(fs_dir_pattern))
         
         if not fs_dirs:
             logger.warning(
-                f"No FreeSurfer output found in {fs_parent}. "
+                f"No FreeSurfer output found in {fs_parent} matching '{fs_dir_pattern}'. "
                 f"Please run FreeSurfer first."
             )
-            fs_input = f"{dataset_derivatives}/freesurfer/sub-{participant_label}"
+            # Fallback to a reasonable default path
+            if fs_version:
+                fs_input_dir = fs_parent / f"freesurfer_{fs_version}" / f"sub-{participant_label}"
+            else:
+                fs_input_dir = dataset_derivatives / f"freesurfer/sub-{participant_label}"
         else:
-            fs_input = fs_dirs[-1] / f"sub-{participant_label}"
+            # Use the most recent/last matching directory
+            fs_input_dir = fs_dirs[-1] / f"sub-{participant_label}"
+        
+        logger.info(f"build_command: Using FreeSurfer input from {fs_input_dir}")
         
         # Build Apptainer command
         # Bind FreeSurfer input (read-only) and output directory
         cmd = [
             "apptainer", "run",
-            "-B", f"{str(fs_input)}:/freesurfer:ro",
+            "-B", f"{str(fs_input_dir)}:/freesurfer:ro",
             "-B", f"{str(output_dir)}:/output",
-            apptainer_img,
+            str(apptainer_img),
             "-f", "/freesurfer",
             "-o", "/output",
             participant_label,
@@ -191,38 +219,5 @@ class Mri2PrintTool(BaseTool):
         if subcortex_iter != 10:
             cmd.extend(["--subcortex-iterations", str(subcortex_iter)])
         
+        logger.info(f"build_command: Final command: {' '.join(cmd)}")
         return cmd
-    
-    @classmethod
-    def process_subject(
-        cls,
-        layout: BIDSLayout,
-        participant_label: str,
-        args: argparse.Namespace,
-        dataset_rawdata: Path,
-        dataset_derivatives: Path,
-        apptainer_img: str,
-        **kwargs
-    ) -> int:
-        """Process a single participant.
-        
-        Returns exit code (0 for success, non-zero for failure).
-        """
-        logger.info(f"Processing participant {participant_label} with mri2print")
-        
-        # Build and execute the command
-        cmd = cls.build_command(
-            layout=layout,
-            participant_label=participant_label,
-            args=args,
-            dataset_rawdata=dataset_rawdata,
-            dataset_derivatives=dataset_derivatives,
-            apptainer_img=apptainer_img,
-            **kwargs
-        )
-        
-        # Import here to avoid circular imports
-        from ln2t_tools.utils.utils import launch_apptainer
-        
-        cmd_str = " ".join(cmd)
-        return launch_apptainer(cmd_str)
