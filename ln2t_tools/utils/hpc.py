@@ -1249,12 +1249,12 @@ FS_DIR="{fs_dir}"
 mkdir -p "$OUTPUT_DIR" "$WORK_DIR"
 
 # Check for existing FreeSurfer outputs
-if [ -d "$FS_DIR/sub-$PARTICIPANT" ]; then
-    echo "Found existing FreeSurfer output for sub-$PARTICIPANT, will use --fs-no-reconall"
+if [ -d "$FS_DIR/$PARTICIPANT" ]; then
+    echo "Found existing FreeSurfer output for $PARTICIPANT, will use --fs-no-reconall"
     FS_BINDING="-B $FS_DIR:/fsdir:ro"
     FS_FLAG="--fs-subjects-dir /fsdir --fs-no-reconall"
 else
-    echo "No FreeSurfer output found for sub-$PARTICIPANT, fMRIPrep will run recon-all"
+    echo "No FreeSurfer output found for $PARTICIPANT, fMRIPrep will run recon-all"
     FS_BINDING=""
     FS_FLAG=""
 fi
