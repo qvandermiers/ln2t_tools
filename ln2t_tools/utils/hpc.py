@@ -1248,6 +1248,15 @@ WORK_DIR="$OUTPUT_DIR/work"
 FS_DIR="{fs_dir}"
 mkdir -p "$OUTPUT_DIR" "$WORK_DIR"
 
+# Debug: Print paths being checked
+echo "DEBUG: Checking for FreeSurfer outputs..."
+echo "DEBUG: HPC_DERIVATIVES=$HPC_DERIVATIVES"
+echo "DEBUG: DATASET=$DATASET"
+echo "DEBUG: FS_DIR=$FS_DIR"
+echo "DEBUG: PARTICIPANT=$PARTICIPANT"
+echo "DEBUG: Looking for: $FS_DIR/$PARTICIPANT"
+ls -la "$FS_DIR/" 2>/dev/null || echo "DEBUG: FS_DIR does not exist or cannot be listed"
+
 # Check for existing FreeSurfer outputs
 if [ -d "$FS_DIR/$PARTICIPANT" ]; then
     echo "Found existing FreeSurfer output for $PARTICIPANT, will use --fs-no-reconall"
