@@ -1235,7 +1235,7 @@ apptainer exec {gpu_flag} \\
         
         version = getattr(args, 'version', '25.1.4')
         fs_license = getattr(args, 'hpc_fs_license', None) or '$HOME/licenses/license.txt'
-        fs_version = getattr(args, 'fs_version', DEFAULT_FMRIPREP_FS_VERSION)
+        fs_version = getattr(args, 'fs_version', None) or DEFAULT_FMRIPREP_FS_VERSION
         apptainer_img = f"{hpc_apptainer_dir}/nipreps.fmriprep.{version}.sif"
         output_dir = f"$HPC_DERIVATIVES/$DATASET-derivatives/fmriprep_{version}"
         fs_dir = f"$HPC_DERIVATIVES/$DATASET-derivatives/freesurfer_{fs_version}"
