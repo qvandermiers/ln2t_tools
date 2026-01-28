@@ -1351,34 +1351,6 @@ Automatically detected suffixes:
 
 Example: `rest_mc_ave.fif` → BIDS: `sub-01_task-rest_proc-mc-ave_meg.fif` in derivatives
 
-#### Simultaneous MEG/EEG Support
-
-When FIF files contain simultaneous EEG recordings, the converter automatically:
-1. **Detects EEG channels** in the MEG data
-2. **Extracts electrode coordinates** from the FIF channel metadata
-3. **Generates `electrodes.tsv`** file following BIDS specification
-
-**Output**:
-- `sub-{id}[_ses-{session}]_electrodes.tsv` in the MEG directory
-- Contains electrode names, positions (x, y, z in meters), and sizes
-- Coordinates stored in MEG device frame as per BIDS specification
-
-**Requirements**:
-- FIF file must contain EEG channels with valid coordinate data
-- Automatic and non-blocking: silently skips if no EEG channels detected
-
-**Example**:
-```
-~/rawdata/{dataset}-rawdata/
-└── sub-01/
-    └── [ses-01/]
-        └── meg/
-            ├── sub-01_task-rest_meg.fif
-            ├── sub-01_task-rest_meg.json
-            ├── sub-01_task-rest_channels.tsv
-            └── sub-01_electrodes.tsv          # Automatically generated
-```
-
 **Output Structure**:
 
 ```

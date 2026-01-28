@@ -264,6 +264,170 @@ def detect_split_files(fif_files: List[Path]) -> Dict[Path, List[Path]]:
     return split_groups
 
 
+def detect_derivative_split_files(deriv_files: List[Path]) -> Dict[Path, List[Path]]:
+    """Detect and group multi-part derivative FIFF files.
+    
+    For derivatives like NAP-1_tsss_mc.fif, NAP-2_tsss_mc.fif, we need to:
+    1. Extract the base name and proc label (NAP, tsss-mc)
+    2. Group by (base_name, proc_label)
+    3. Detect split patterns within each group
+    
+    Handles both patterns:
+    - NAP-1_tsss_mc.fif, NAP-2_tsss_mc.fif (split before proc)
+    - NAP_tsss_mc-1.fif, NAP_tsss_mc-2.fif (split after proc)
+    
+    Parameters
+    ----------
+    deriv_files : List[Path]
+        List of derivative FIF file paths
+    
+    Returns
+    -------
+    Dict[Path, List[Path]]
+        Mapping of primary file -> list of all parts in order
+    """
+    split_groups = {}
+    processed = set()
+    deriv_files_set = set(deriv_files)
+    
+    # Group derivatives by (base_name, proc_label)
+    deriv_groups = defaultdict(list)
+    for deriv_file in deriv_files:
+        deriv_info = extract_derivative_info(deriv_file.name)
+        if deriv_info is None:
+            continue
+        base_filename, proc_label = deriv_info
+        
+        # Extract base name without split suffix
+        # NAP.fif or NAP-1.fif -> NAP
+        base_stem = Path(base_filename).stem
+        base_match = re.match(r'^(.+?)(?:-\d+)?$', base_stem)
+        if base_match:
+            base_name = base_match.group(1)
+        else:
+            base_name = base_stem
+        
+        key = (base_name, proc_label)
+        deriv_groups[key].append(deriv_file)
+    
+    # For each group, detect splits
+    for (base_name, proc_label), files in deriv_groups.items():
+        if len(files) <= 1:
+            continue
+        
+        # Try pattern: NAP_proc.fif, NAP-1_proc.fif, NAP-2_proc.fif
+        proc_suffix = proc_label.replace('-', '_')
+        parent_dir = files[0].parent
+        base_file = parent_dir / f"{base_name}_{proc_suffix}.fif"
+        
+        if base_file in deriv_files_set:
+            primary = base_file
+        else:
+            # Use first numbered file as primary
+            primary = parent_dir / f"{base_name}-1_{proc_suffix}.fif"
+            if primary not in deriv_files_set:
+                continue
+        
+        # Collect all parts
+        parts = []
+        if base_file in deriv_files_set:
+            parts.append(base_file)
+        
+        idx = 1
+        while True:
+            next_part = parent_dir / f"{base_name}-{idx}_{proc_suffix}.fif"
+            if next_part in deriv_files_set:
+                parts.append(next_part)
+                idx += 1
+            else:
+                break
+        
+        if len(parts) > 1:
+            split_groups[parts[0]] = parts
+            processed.update(parts)
+            logger.debug(f"  Detected derivative split: {base_name}_{proc_suffix} ({len(parts)} parts)")
+    
+    return split_groups
+
+
+def find_matching_raw_file(
+    derivative_filename: str,
+    raw_files: List[Path],
+    split_file_groups: Dict[Path, List[Path]]
+) -> Optional[Tuple[Path, Optional[int]]]:
+    """Find the raw file that corresponds to a derivative file.
+    
+    Handles both split naming patterns:
+    - file-1_mc.fif (split first, then processing)
+    - file_mc-1.fif (processing first, then split)
+    
+    Parameters
+    ----------
+    derivative_filename : str
+        Name of the derivative file (e.g., 'chessboard1_mc.fif', 'file_mc-1.fif')
+    raw_files : List[Path]
+        List of raw FIF file paths in the session
+    split_file_groups : Dict[Path, List[Path]]
+        Dict mapping primary file → list of all split parts
+    
+    Returns
+    -------
+    Optional[Tuple[Path, Optional[int]]]
+        Tuple of (matching_raw_path, split_index) where:
+        - matching_raw_path: Path to the raw file (primary file if split)
+        - split_index: Index if derivative is a split part (0=primary, 1=first split, etc), None if not split
+        Returns None if no match found
+    """
+    stem = Path(derivative_filename).stem
+    
+    # First, check if there's a split suffix at the end (e.g., file_mc-1 or file-1_mc)
+    split_match = re.match(r'^(.+?)-(\d+)$', stem)
+    split_num = None
+    base_stem_with_proc = stem
+    
+    if split_match:
+        # Has a split suffix: extract it
+        base_stem_with_proc = split_match.group(1)  # e.g., "file_mc" or "file"
+        split_num = int(split_match.group(2))        # e.g., 1, 2, 3
+    
+    # Now extract derivative info from the (possibly split-stripped) stem
+    # Reconstruct filename for derivative extraction
+    temp_filename = base_stem_with_proc + '.fif'
+    deriv_info = extract_derivative_info(temp_filename)
+    
+    if not deriv_info:
+        # Not a derivative file
+        return None
+    
+    base_filename_stem, _ = deriv_info  # e.g., 'file.fif' → 'file'
+    base_filename_stem = Path(base_filename_stem).stem
+    
+    # Now we have the base stem and possibly a split number
+    if split_num is not None:
+        # Derivative is for a split part (e.g., 'file_mc-1.fif' or 'file-1_mc.fif')
+        primary_filename = f"{base_filename_stem}.fif"
+        
+        # Find the primary raw file
+        for raw_path in raw_files:
+            if raw_path.name == primary_filename:
+                # Verify this is actually a split file group
+                if raw_path in split_file_groups:
+                    return (raw_path, split_num)  # split_num matches the -N suffix
+                break
+    else:
+        # Derivative is for primary file (e.g., 'file_mc.fif')
+        primary_filename = f"{base_filename_stem}.fif"
+        for raw_path in raw_files:
+            if raw_path.name == primary_filename:
+                # Check if this raw file is part of a split group
+                if raw_path in split_file_groups:
+                    return (raw_path, 0)  # 0 = primary file
+                else:
+                    return (raw_path, None)  # Not a split file
+    
+    return None
+
+
 def match_file_pattern(filename: str, patterns: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Match a filename against configured patterns.
     
@@ -638,136 +802,6 @@ def normalize_raw_info(raw: 'mne.io.BaseRaw') -> None:
         si['birthday'] = None
 
 
-def extract_eeg_information(raw: 'mne.io.BaseRaw') -> Optional[Dict[str, List[Any]]]:
-    """Extract EEG channel information from FIF file for electrodes.tsv.
-    
-    Detects simultaneous EEG channels in MEG FIF files and extracts electrode
-    coordinates from the FIF channel metadata. Returns None if no EEG channels found.
-    
-    Parameters
-    ----------
-    raw : mne.io.BaseRaw
-        MNE raw object loaded from FIF file
-    
-    Returns
-    -------
-    Optional[Dict[str, List[Any]]]
-        Dictionary with lists of electrode information:
-        {
-            'name': [...],      # EEG channel names
-            'x': [...],         # X coordinates (in meters, MEG device frame)
-            'y': [...],         # Y coordinates
-            'z': [...],         # Z coordinates
-            'size': [...]       # Electrode size (in meters)
-        }
-        Returns None if no EEG channels found.
-    """
-    # Get EEG channel indices
-    eeg_indices = mne.pick_types(raw.info, eeg=True, exclude=[])
-    
-    if len(eeg_indices) == 0:
-        return None
-    
-    eeg_data = {
-        'name': [],
-        'x': [],
-        'y': [],
-        'z': [],
-        'size': []
-    }
-    
-    for idx in eeg_indices:
-        ch_info = raw.info['chs'][idx]
-        
-        # Channel name
-        eeg_data['name'].append(ch_info['ch_name'])
-        
-        # Channel location in device coordinates (in meters)
-        # loc[0:3] contains the electrode position
-        loc = ch_info['loc'][:3]
-        eeg_data['x'].append(loc[0])
-        eeg_data['y'].append(loc[1])
-        eeg_data['z'].append(loc[2])
-        
-        # Electrode size (optional, in meters)
-        # Default to a reasonable size if not specified
-        size = ch_info.get('size', 0.005)  # Default 5mm if not specified
-        eeg_data['size'].append(size)
-    
-    return eeg_data
-
-
-def write_electrodes_tsv(
-    eeg_data: Dict[str, List[Any]],
-    subject: str,
-    session: Optional[str],
-    bids_root: Path,
-    datatype: str = 'meg'
-) -> None:
-    """Write electrodes.tsv file for simultaneous MEG/EEG recording.
-    
-    Creates a BIDS-compliant electrodes.tsv file with EEG electrode coordinates.
-    The electrodes are stored in MEG device coordinates (device frame).
-    
-    BIDS naming: sub-<label>[_ses-<label>]_electrodes.tsv
-    Location: sub-<label>[_ses-<label>]/meg/
-    
-    Parameters
-    ----------
-    eeg_data : Dict[str, List[Any]]
-        Dictionary with 'name', 'x', 'y', 'z', 'size' lists
-    subject : str
-        Subject label (e.g., '01', 'HC01')
-    session : Optional[str]
-        Session label (e.g., '01') or None
-    bids_root : Path
-        Root BIDS directory
-    datatype : str
-        Data type directory (default 'meg')
-    """
-    import csv
-    
-    # Determine the MEG directory
-    if session:
-        meg_dir = bids_root / f"sub-{subject}" / f"ses-{session}" / datatype
-    else:
-        meg_dir = bids_root / f"sub-{subject}" / datatype
-    
-    meg_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Build filename: sub-<label>[_ses-<label>]_electrodes.tsv
-    fname_parts = [f"sub-{subject}"]
-    if session:
-        fname_parts.append(f"ses-{session}")
-    fname_parts.append("electrodes.tsv")
-    filename = "_".join(fname_parts)
-    
-    electrodes_file = meg_dir / filename
-    
-    # Write TSV file with proper formatting
-    # BIDS required columns: name, x, y, z
-    # Optional column: size
-    with open(electrodes_file, 'w', newline='') as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=['name', 'x', 'y', 'z', 'size'],
-            delimiter='\t',
-            lineterminator='\n'
-        )
-        writer.writeheader()
-        
-        for i in range(len(eeg_data['name'])):
-            writer.writerow({
-                'name': eeg_data['name'][i],
-                'x': f"{eeg_data['x'][i]:.6f}",
-                'y': f"{eeg_data['y'][i]:.6f}",
-                'z': f"{eeg_data['z'][i]:.6f}",
-                'size': f"{eeg_data['size'][i]:.6f}"
-            })
-    
-    logger.info(f"    → Created electrodes.tsv: {filename} ({len(eeg_data['name'])} EEG channels)")
-
-
 def convert_raw_file(
     fif_path: Path,
     subject: str,
@@ -829,11 +863,6 @@ def convert_raw_file(
         write_raw_bids(raw, bids_path, overwrite=overwrite, verbose=False)
         logger.debug(f"    -> Saved BIDS file: {bids_path.basename}")
         
-        # Check for simultaneous EEG recording and generate electrodes.tsv if present
-        eeg_data = extract_eeg_information(raw)
-        if eeg_data is not None:
-            write_electrodes_tsv(eeg_data, subject, session, bids_root, datatype)
-        
         return True
         
     except Exception as err:
@@ -850,14 +879,15 @@ def copy_derivative_file(
     derivative_info: Tuple[str, str],
     derivatives_root: Path,
     pipeline_name: str,
-    pipeline_version: Optional[str] = None
+    pipeline_version: Optional[str] = None,
+    split_parts: Optional[List[Path]] = None
 ) -> bool:
     """Copy a derivative FIF file to BIDS derivatives folder.
     
     Parameters
     ----------
     fif_path : Path
-        Path to derivative FIF file
+        Path to derivative FIF file (primary file if split)
     subject : str
         Subject ID (without 'sub-' prefix)
     session : Optional[str]
@@ -874,6 +904,8 @@ def copy_derivative_file(
         Pipeline name (e.g., 'maxfilter')
     pipeline_version : Optional[str]
         Pipeline version string
+    split_parts : Optional[List[Path]]
+        List of all split file parts (including primary)
     
     Returns
     -------
@@ -899,26 +931,55 @@ def copy_derivative_file(
     
     target_dir.mkdir(parents=True, exist_ok=True)
     
-    # Target filename: sub-<label>[_ses-<label>]_task-<label>[_run-<index>]_proc-<label>_meg.fif
-    fname_parts = [f"sub-{subject}"]
-    if session:
-        fname_parts.append(f"ses-{session}")
-    fname_parts.append(f"task-{task}")
-    if run is not None:
-        fname_parts.append(f"run-{run:02d}")
-    fname_parts.append(f"proc-{proc_label}")
-    fname_parts.append("meg.fif")
+    # If there are split parts, copy each with split entity
+    if split_parts and len(split_parts) > 1:
+        all_success = True
+        for idx, split_file in enumerate(split_parts, start=1):
+            # Target filename: sub-<label>[_ses-<label>]_task-<label>[_run-<index>]_split-<index>_proc-<label>_meg.fif
+            fname_parts = [f"sub-{subject}"]
+            if session:
+                fname_parts.append(f"ses-{session}")
+            fname_parts.append(f"task-{task}")
+            if run is not None:
+                fname_parts.append(f"run-{run:02d}")
+            fname_parts.append(f"split-{idx:02d}")
+            fname_parts.append(f"proc-{proc_label}")
+            fname_parts.append("meg.fif")
+            
+            target_name = "_".join(fname_parts)
+            target_path = target_dir / target_name
+            
+            try:
+                shutil.copy2(split_file, target_path)
+                logger.debug(f"    -> Saved split {idx}/{len(split_parts)}: {target_name}")
+            except Exception as err:
+                logger.error(f"  ✗ Failed to copy derivative split {split_file.name}: {err}")
+                all_success = False
+        
+        return all_success
     
-    target_name = "_".join(fname_parts)
-    target_path = target_dir / target_name
-    
-    try:
-        shutil.copy2(fif_path, target_path)
-        logger.debug(f"    -> Saved to derivatives: {target_name}")
-        return True
-    except Exception as err:
-        logger.error(f"  ✗ Failed to copy derivative {fif_path.name}: {err}")
-        return False
+    else:
+        # Single file (no splits)
+        # Target filename: sub-<label>[_ses-<label>]_task-<label>[_run-<index>]_proc-<label>_meg.fif
+        fname_parts = [f"sub-{subject}"]
+        if session:
+            fname_parts.append(f"ses-{session}")
+        fname_parts.append(f"task-{task}")
+        if run is not None:
+            fname_parts.append(f"run-{run:02d}")
+        fname_parts.append(f"proc-{proc_label}")
+        fname_parts.append("meg.fif")
+        
+        target_name = "_".join(fname_parts)
+        target_path = target_dir / target_name
+        
+        try:
+            shutil.copy2(fif_path, target_path)
+            logger.debug(f"    -> Saved to derivatives: {target_name}")
+            return True
+        except Exception as err:
+            logger.error(f"  ✗ Failed to copy derivative {fif_path.name}: {err}")
+            return False
 
 
 def import_meg(
@@ -1003,7 +1064,7 @@ def import_meg(
         participant_id = participant_label.replace('sub-', '')
         bids_subject = f"sub-{participant_id}"
         
-        logger.info(f"\n{'='*60}")
+        logger.info(f"{'='*60}")
         logger.info(f"Processing participant: {bids_subject}")
         logger.info(f"{'='*60}")
         
@@ -1049,7 +1110,7 @@ def import_meg(
             
             sess_dir = meg_folder / folder_name
             
-            logger.info(f"\n{'-'*60}")
+            logger.info(f"{'-'*60}")
             if session_id:
                 logger.info(f"SESSION: {folder_name} (ses-{session_id})")
             else:
@@ -1075,7 +1136,7 @@ def import_meg(
             
             # Detect calibration files
             if calibration_auto_detect:
-                logger.info("\nDetecting calibration files...")
+                logger.info("Detecting calibration files...")
                 calib_files = detect_calibration_files(
                     meg_folder, folder_name, meg_maxfilter_root, calibration_system
                 )
@@ -1090,7 +1151,7 @@ def import_meg(
             # Detect split files
             split_file_groups = detect_split_files(raw_files)
             if split_file_groups:
-                logger.info(f"\nDetected {len(split_file_groups)} split file group(s)")
+                logger.info(f"Detected {len(split_file_groups)} split file group(s)")
             
             # Get primary files only (exclude split parts)
             split_parts = set()
@@ -1099,7 +1160,7 @@ def import_meg(
             primary_raw_files = [f for f in raw_files if f not in split_parts]
             
             # Match files to patterns and assign run numbers
-            logger.info("\nMatching files to patterns...")
+            logger.info("Matching files to patterns...")
             file_mapping = {}
             for fif_file in primary_raw_files:
                 pattern_rule = match_file_pattern(fif_file.name, file_patterns)
@@ -1130,7 +1191,7 @@ def import_meg(
                         final_mapping[fif_path] = (task, idx)
             
             # Convert files
-            logger.info("\nConverting files...")
+            logger.info("Converting files...")
             for fif_path in primary_raw_files:
                 if fif_path not in final_mapping:
                     stats.add_file('unknown', 'skipped', fif_path.name)
@@ -1156,9 +1217,35 @@ def import_meg(
                 pipeline_version = config.get('derivatives', {}).get('maxfilter_version')
                 
                 if pipeline_name and pipeline_name.lower() != 'none':
-                    logger.info(f"\nConverting {len(derivative_files)} derivative file(s)...")
+                    logger.info(f"Converting {len(derivative_files)} derivative file(s)...")
                     
-                    for deriv_file in derivative_files:
+                    # Detect split files in derivatives (special handling for proc suffixes)
+                    deriv_split_groups = detect_derivative_split_files(derivative_files)
+                    if deriv_split_groups:
+                        logger.info(f"Detected {len(deriv_split_groups)} derivative split file group(s)")
+                    
+                    deriv_split_parts = set()
+                    for primary_file, parts in deriv_split_groups.items():
+                        deriv_split_parts.update(parts[1:])
+                    primary_deriv_files = [f for f in derivative_files if f not in deriv_split_parts]
+                    
+                    # Build mapping of task -> raw file organization (splits or runs)
+                    task_organization = {}  # task -> {'type': 'splits'/'runs', 'base_names': set()}
+                    for raw_path, (task, run) in final_mapping.items():
+                        if task not in task_organization:
+                            task_organization[task] = {'base_names': set(), 'has_splits': False, 'has_runs': False}
+                        
+                        # Check if this raw file was part of a split group
+                        if raw_path in split_file_groups:
+                            task_organization[task]['has_splits'] = True
+                            # Extract base name without extension or split suffix
+                            base_name = raw_path.stem.split('-')[0]  # NAP from NAP.fif or NAP-1.fif
+                            task_organization[task]['base_names'].add(base_name)
+                        elif run is not None:
+                            task_organization[task]['has_runs'] = True
+                    
+                    # Process each primary derivative file
+                    for deriv_file in primary_deriv_files:
                         deriv_info = extract_derivative_info(deriv_file.name)
                         if deriv_info is None:
                             continue
@@ -1170,14 +1257,46 @@ def import_meg(
                         if pattern_rule:
                             task = pattern_rule.get('task', 'unknown')
                             run_extraction = pattern_rule.get('run_extraction', 'last_digits')
-                            run = extract_run_from_filename(deriv_file.name, run_extraction)
                             
-                            run_str = f" (run {run})" if run is not None else ""
+                            # Determine if this derivative is a split or a run based on raw file organization
+                            run = None
+                            is_split = False
+                            split_parts_for_deriv = deriv_split_groups.get(deriv_file, None)
+                            
+                            if task in task_organization:
+                                # Extract base name from derivative by removing hyphen-suffix (splits only use hyphens)
+                                # NAP from NAP_tsss_mc.fif or NAP-1_tsss_mc.fif
+                                # RS_1 from RS_1_tsss_mc.fif (keep underscore, that's a run indicator)
+                                deriv_base = base_filename.split('-')[0]
+                                
+                                # Check if corresponding raw file was a split
+                                if (task_organization[task]['has_splits'] and 
+                                    deriv_base in task_organization[task]['base_names']):
+                                    # This is a split file group, not different runs
+                                    is_split = True
+                                    run = None
+                                else:
+                                    # This is a run-based organization
+                                    run = extract_run_from_filename(deriv_file.name, run_extraction)
+                            else:
+                                # No corresponding raw file info, use default extraction
+                                run = extract_run_from_filename(deriv_file.name, run_extraction)
+                            
+                            # Format log message
+                            if is_split and split_parts_for_deriv:
+                                num_parts = len(split_parts_for_deriv)
+                                run_str = f" ({num_parts} parts)"
+                            elif run is not None:
+                                run_str = f" (run {run})"
+                            else:
+                                run_str = ""
+                            
                             logger.info(f"  ✓ Converting: {deriv_file.name}{run_str} -> task={task} (proc-{proc_label})")
                             
                             success = copy_derivative_file(
                                 deriv_file, participant_id, session_id, task, run,
-                                deriv_info, derivatives_dir, pipeline_name, pipeline_version
+                                deriv_info, derivatives_dir, pipeline_name, pipeline_version,
+                                split_parts=split_parts_for_deriv
                             )
                             
                             if not success:
@@ -1186,7 +1305,7 @@ def import_meg(
                             logger.warning(f"  ⊘ No pattern match for derivative: {deriv_file.name}")
         
         # Summary for this participant
-        logger.info(f"\n{'-'*60}")
+        logger.info(f"{'-'*60}")
         logger.info(f"Summary for {bids_subject}:")
         logger.info(f"  Total files: {stats.total_files}")
         logger.info(f"  ✓ Converted: {stats.converted}")
@@ -1204,7 +1323,7 @@ def import_meg(
             failed_participants.append(participant_id)
     
     # Overall summary
-    logger.info(f"\n{'='*60}")
+    logger.info(f"{'='*60}")
     logger.info("MEG Import Summary:")
     logger.info(f"  Successful: {success_count}/{len(participant_labels)}")
     if failed_participants:
