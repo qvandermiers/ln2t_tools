@@ -982,6 +982,284 @@ def copy_derivative_file(
             return False
 
 
+def extract_bids_entities(filename: str) -> Dict[str, Optional[str]]:
+    """Extract BIDS entities from a filename.
+    
+    Parses BIDS entities like sub, ses, task, run, etc.
+    
+    Parameters
+    ----------
+    filename : str
+        BIDS filename (without path)
+    
+    Returns
+    -------
+    Dict[str, Optional[str]]
+        Dictionary with extracted entities
+    """
+    entities = {
+        'sub': None,
+        'ses': None,
+        'task': None,
+        'run': None,
+    }
+    
+    # Remove extension
+    name_without_ext = filename.rsplit('.', 1)[0]
+    
+    # Split by underscore
+    parts = name_without_ext.split('_')
+    
+    for part in parts:
+        if part.startswith('sub-'):
+            entities['sub'] = part[4:]
+        elif part.startswith('ses-'):
+            entities['ses'] = part[4:]
+        elif part.startswith('task-'):
+            entities['task'] = part[5:]
+        elif part.startswith('run-'):
+            entities['run'] = part[4:]
+    
+    return entities
+
+
+def compare_tsv_files(file1: Path, file2: Path) -> bool:
+    """Compare two TSV files for identical content.
+    
+    Parameters
+    ----------
+    file1 : Path
+        First file path
+    file2 : Path
+        Second file path
+    
+    Returns
+    -------
+    bool
+        True if files are identical, False otherwise
+    """
+    try:
+        with open(file1, 'r', encoding='utf-8') as f1, open(file2, 'r', encoding='utf-8') as f2:
+            return f1.read() == f2.read()
+    except Exception as err:
+        logger.warning(f"Failed to compare {file1.name} and {file2.name}: {err}")
+        return False
+
+
+def create_most_general_name(filenames: List[str]) -> str:
+    """Create the most general filename by removing run numbers.
+    
+    Only removes run entity, keeping sub, ses, and task.
+    
+    Parameters
+    ----------
+    filenames : List[str]
+        List of identical filenames (should all have same task)
+    
+    Returns
+    -------
+    str
+        The most general filename (with run removed)
+    """
+    if not filenames:
+        return ""
+    
+    # Extract entities from first file (all should have same task)
+    entities = extract_bids_entities(filenames[0])
+    
+    # Remove run number
+    entities['run'] = None
+    
+    return reconstruct_filename(entities)
+
+
+def reconstruct_filename(entities: Dict[str, Optional[str]], extension: str = ".tsv") -> str:
+    """Reconstruct a BIDS filename from entities.
+    
+    Parameters
+    ----------
+    entities : Dict[str, Optional[str]]
+        Dictionary with BIDS entities
+    extension : str
+        File extension (default: .tsv)
+    
+    Returns
+    -------
+    str
+        Reconstructed filename
+    """
+    parts = []
+    
+    if entities.get('sub'):
+        parts.append(f"sub-{entities['sub']}")
+    if entities.get('ses'):
+        parts.append(f"ses-{entities['ses']}")
+    if entities.get('task'):
+        parts.append(f"task-{entities['task']}")
+    if entities.get('run'):
+        parts.append(f"run-{entities['run']}")
+    
+    parts.append("channels")
+    
+    return "_".join(parts) + extension
+
+
+def consolidate_identical_group(identical_files: List[Path]) -> Optional[Path]:
+    """Consolidate a group of identical files by creating the most general name.
+    
+    Parameters
+    ----------
+    identical_files : List[Path]
+        List of identical file paths
+    
+    Returns
+    -------
+    Optional[Path]
+        Path to the retained file, None if consolidation failed
+    """
+    if len(identical_files) <= 1:
+        return identical_files[0] if identical_files else None
+    
+    filenames = [f.name for f in identical_files]
+    most_general_name = create_most_general_name(filenames)
+    most_general_path = identical_files[0].parent / most_general_name
+    
+    # Check if the generalized file already exists among the identical files
+    existing_general = None
+    for f in identical_files:
+        if f.name == most_general_name:
+            existing_general = f
+            break
+    
+    if existing_general:
+        # The generalized name already exists, just delete the others
+        most_general_path = existing_general
+    else:
+        # Create the new generalized file
+        try:
+            shutil.copy2(identical_files[0], most_general_path)
+            logger.debug(f"    Created consolidated file: {most_general_path.name}")
+        except Exception as err:
+            logger.warning(f"Failed to create consolidated file {most_general_path.name}: {err}")
+            return None
+    
+    # Delete all other files
+    for file_path in identical_files:
+        if file_path != most_general_path:
+            try:
+                file_path.unlink()
+                logger.debug(f"    Deleted redundant file: {file_path.name}")
+            except Exception as err:
+                logger.warning(f"Failed to delete {file_path.name}: {err}")
+    
+    return most_general_path
+
+
+def consolidate_channels_metadata(bids_root: Path, participant_labels: List[str], session: Optional[str] = None) -> None:
+    """Consolidate identical *channels.tsv files in MEG datasets.
+    
+    Implements BIDS inheritance principle by removing redundant metadata files.
+    Only removes run numbers when files of the same task are identical.
+    Only processes files within each subject/session folder independently.
+    
+    Parameters
+    ----------
+    bids_root : Path
+        BIDS root directory
+    participant_labels : List[str]
+        List of participant IDs (without 'sub-' prefix) to process
+    session : Optional[str]
+        Session label (without 'ses-' prefix), if None processes all sessions
+    """
+    # Build list of MEG directories to process based on participant labels
+    meg_dirs = []
+    for participant_id in participant_labels:
+        if session:
+            # Specific session
+            meg_dir = bids_root / f"sub-{participant_id}" / f"ses-{session}" / "meg"
+            if meg_dir.exists():
+                meg_dirs.append(meg_dir)
+        else:
+            # Check for session structure
+            subject_dir = bids_root / f"sub-{participant_id}"
+            if subject_dir.exists():
+                # Check if there are sessions
+                session_dirs = list(subject_dir.glob("ses-*"))
+                if session_dirs:
+                    # Process each session
+                    for ses_dir in session_dirs:
+                        meg_dir = ses_dir / "meg"
+                        if meg_dir.exists():
+                            meg_dirs.append(meg_dir)
+                else:
+                    # No sessions, check for direct meg folder
+                    meg_dir = subject_dir / "meg"
+                    if meg_dir.exists():
+                        meg_dirs.append(meg_dir)
+    
+    if not meg_dirs:
+        logger.info("No MEG directories found for consolidation")
+        return
+    
+    total_consolidated = 0
+    total_deleted = 0
+    
+    # Process each MEG directory independently
+    for meg_dir in meg_dirs:
+        channels_files = list(meg_dir.glob("*channels.tsv"))
+        
+        if len(channels_files) <= 1:
+            continue
+        
+        logger.debug(f"Processing {meg_dir.relative_to(bids_root)}: {len(channels_files)} channels.tsv file(s)")
+        
+        # Group files by task
+        task_groups = defaultdict(list)
+        for file_path in channels_files:
+            entities = extract_bids_entities(file_path.name)
+            task = entities.get('task', 'no-task')
+            task_groups[task].append(file_path)
+        
+        # Within each task, find identical files
+        for task, task_files in task_groups.items():
+            if len(task_files) <= 1:
+                continue
+            
+            logger.debug(f"  Checking task-{task}: {len(task_files)} file(s)")
+            
+            # Find all groups of identical files within this task
+            processed = set()
+            for i, file1 in enumerate(task_files):
+                if file1 in processed:
+                    continue
+                
+                # Find all files identical to file1
+                identical_group = [file1]
+                for file2 in task_files[i+1:]:
+                    if file2 not in processed and compare_tsv_files(file1, file2):
+                        identical_group.append(file2)
+                
+                # If we found identical files, consolidate them
+                if len(identical_group) > 1:
+                    logger.info(f"  Found {len(identical_group)} identical files for task-{task} in {meg_dir.relative_to(bids_root)}:")
+                    for f in identical_group:
+                        logger.info(f"    - {f.name}")
+                    
+                    retained = consolidate_identical_group(identical_group)
+                    if retained:
+                        logger.info(f"  → Consolidated to: {retained.name}")
+                        total_consolidated += 1
+                        total_deleted += len(identical_group) - 1
+                        processed.update(identical_group)
+    
+    if total_consolidated > 0:
+        logger.info(f"Metadata consolidation complete:")
+        logger.info(f"  Groups consolidated: {total_consolidated}")
+        logger.info(f"  Files deleted: {total_deleted}")
+    else:
+        logger.info("Metadata consolidation: No identical files found")
+
+
 def import_meg(
     dataset: str,
     participant_labels: List[str],
@@ -1329,5 +1607,9 @@ def import_meg(
     if failed_participants:
         logger.info(f"  Failed: {', '.join(failed_participants)}")
     logger.info(f"{'='*60}\n")
+    
+    # Consolidate identical channels.tsv files using BIDS inheritance principle
+    logger.info("Consolidating metadata files using BIDS inheritance principle...")
+    consolidate_channels_metadata(rawdata_dir, participant_labels, session)
     
     return success_count > 0
