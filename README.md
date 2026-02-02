@@ -1351,6 +1351,36 @@ Automatically detected suffixes:
 
 Example: `rest_mc_ave.fif` → BIDS: `sub-01_task-rest_proc-mc-ave_meg.fif` in derivatives
 
+#### MEG Metadata Features
+
+**AssociatedEmptyRoom (BIDS Standard)**:
+- Automatically detects empty room recordings (`*task-noise*_meg.fif`)
+- Adds `AssociatedEmptyRoom` field to all MEG JSON sidecars
+- References the empty room file used for noise characterization
+- Enables advanced noise processing and artifact rejection
+- See [BIDS Specification](https://bids-specification.readthedocs.io/en/stable/glossary.html#associatedemptyroom-metadata)
+
+Example JSON output:
+```json
+{
+  "TaskName": "visual",
+  "Manufacturer": "Elekta",
+  "SamplingFrequency": 1000.0,
+  "AssociatedEmptyRoom": "sub-01_task-noise_meg.fif",
+  ...
+}
+```
+
+**Head Shape and Digitized Points**:
+- Extracts digitized head points from raw FIF files using `raw.info['dig']`
+- Creates `*_headshape.pos` file in Polhemus format (plain text: x y z coordinates per line)
+- File is session-specific and shared across all tasks/runs
+- Contains head surface points and anatomical landmarks
+- Automatically skips if file already exists (no-op on re-conversion)
+- **Note**: Only created if digitized points were recorded during acquisition
+
+Example file: `sub-01_ses-01_headshape.pos` (coordinates in meters, 7 decimal precision)
+
 **Output Structure**:
 
 ```
