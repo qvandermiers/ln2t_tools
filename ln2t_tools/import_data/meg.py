@@ -802,6 +802,155 @@ def normalize_raw_info(raw: 'mne.io.BaseRaw') -> None:
         si['birthday'] = None
 
 
+
+
+
+def add_associated_empty_room_to_session(
+    meg_dir: Path,
+    subject: str,
+    session: Optional[str] = None
+) -> None:
+    """Add AssociatedEmptyRoom field to all MEG JSON files in a session.
+    
+    Finds the task-noise MEG file and adds its filename to all other MEG JSON files.
+    According to BIDS specification, AssociatedEmptyRoom should reference
+    the empty room FIF file used for noise characterization.
+    
+    Reference: https://bids-specification.readthedocs.io/en/stable/glossary.html#associatedemptyroom-metadata
+    
+    Parameters
+    ----------
+    meg_dir : Path
+        Path to the MEG directory containing the converted files
+    subject : str
+        Subject ID (without 'sub-' prefix)
+    session : Optional[str]
+        Session ID (without 'ses-' prefix)
+    """
+    if not meg_dir.exists():
+        return
+    
+    # Find the noise file
+    noise_files = list(meg_dir.glob("*task-noise*_meg.fif"))
+    if not noise_files:
+        logger.debug(f"No task-noise file found in {meg_dir}")
+        return
+    
+    noise_filename = noise_files[0].name
+    logger.info(f"  Adding AssociatedEmptyRoom reference to: {noise_filename}")
+    
+    # Find all MEG JSON files (except the noise file itself)
+    meg_json_files = [f for f in meg_dir.glob("*_meg.json") 
+                      if 'task-noise' not in f.name]
+    
+    if not meg_json_files:
+        logger.debug("No MEG JSON files to update")
+        return
+    
+    # Add AssociatedEmptyRoom to each JSON file
+    updated_count = 0
+    for json_path in meg_json_files:
+        try:
+            # Read existing JSON
+            with open(json_path, 'r') as f:
+                metadata = json.load(f)
+            
+            # Add the AssociatedEmptyRoom field
+            metadata['AssociatedEmptyRoom'] = noise_filename
+            
+            # Write updated JSON
+            with open(json_path, 'w') as f:
+                json.dump(metadata, f, indent=4)
+            
+            updated_count += 1
+            logger.debug(f"  Updated {json_path.name}")
+            
+        except Exception as err:
+            logger.warning(f"Failed to update {json_path.name}: {err}")
+    
+    if updated_count > 0:
+        logger.info(f"  ✓ Added AssociatedEmptyRoom to {updated_count} file(s)")
+
+
+def extract_and_write_headshape(
+    raw: 'mne.io.BaseRaw',
+    subject: str,
+    session: Optional[str],
+    bids_root: Path,
+    datatype: str = 'meg'
+) -> Optional[Path]:
+    """Extract digitized head points from raw FIF and write to *_headshape.pos file.
+    
+    Extracts all digitized points (head surface, fiducials, etc.) from the raw.info['dig']
+    and writes them to a Polhemus .pos format file. This file is shared across all tasks/runs
+    in a session since the head shape doesn't change.
+    
+    Parameters
+    ----------
+    raw : mne.io.BaseRaw
+        MNE raw object containing digitized point information
+    subject : str
+        Subject ID (without 'sub-' prefix)
+    session : Optional[str]
+        Session ID (without 'ses-' prefix)
+    bids_root : Path
+        BIDS root directory
+    datatype : str
+        BIDS datatype folder (default: 'meg')
+
+    Returns
+    -------
+    Optional[Path]
+        Path to created headshape file, None if no digitized points found
+    """
+    # Check if there are digitized points
+    dig = raw.info.get('dig')
+    if not dig or len(dig) == 0:
+        logger.debug("No digitized points found in raw data")
+        return None
+
+    try:
+        # Create target directory
+        if session:
+            target_dir = bids_root / f"sub-{subject}" / f"ses-{session}" / datatype
+        else:
+            target_dir = bids_root / f"sub-{subject}" / datatype
+
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create headshape filename (session-specific, shared across all tasks/runs)
+        fname_parts = [f"sub-{subject}"]
+        if session:
+            fname_parts.append(f"ses-{session}")
+        fname_parts.append("headshape.pos")
+
+        headshape_filename = "_".join(fname_parts)
+        headshape_path = target_dir / headshape_filename
+
+        # Check if file already exists (don't overwrite)
+        if headshape_path.exists():
+            logger.debug(f"Headshape file already exists: {headshape_filename}")
+            return headshape_path
+
+        # Extract and write digitized points in Polhemus .pos format
+        # Format: plain text with one point per line: x y z (in meters, space-separated)
+        with open(headshape_path, 'w') as f:
+            for point in dig:
+                coords = point.get('r')  # Get 3D coordinates [x, y, z]
+                if coords is not None:
+                    # Write coordinates with high precision (7 decimal places typical for Polhemus)
+                    f.write(f"{coords[0]:.7f} {coords[1]:.7f} {coords[2]:.7f}\n")
+
+        logger.info(f"  ✓ Created headshape file: {headshape_filename} ({len(dig)} digitized points)")
+        return headshape_path
+
+    except Exception as err:
+        logger.warning(f"Failed to extract and write headshape points: {err}")
+        return None
+
+        return False
+
+
 def convert_raw_file(
     fif_path: Path,
     subject: str,
@@ -862,6 +1011,9 @@ def convert_raw_file(
         
         write_raw_bids(raw, bids_path, overwrite=overwrite, verbose=False)
         logger.debug(f"    -> Saved BIDS file: {bids_path.basename}")
+        
+        # Extract headshape file (no-op if already created)
+        extract_and_write_headshape(raw, subject, session, bids_root, datatype)
         
         return True
         
@@ -1432,6 +1584,7 @@ def import_meg(
                 logger.info(f"Detected {len(split_file_groups)} split file group(s)")
             
             # Get primary files only (exclude split parts)
+            # Get primary files only (exclude split parts)
             split_parts = set()
             for primary_file, parts in split_file_groups.items():
                 split_parts.update(parts[1:])
@@ -1581,6 +1734,14 @@ def import_meg(
                                 logger.warning(f"    ✗ Copy failed for {deriv_file.name}")
                         else:
                             logger.warning(f"  ⊘ No pattern match for derivative: {deriv_file.name}")
+            
+            # Add AssociatedEmptyRoom to all MEG JSON files
+            logger.info("Processing AssociatedEmptyRoom metadata...")
+            if session_id:
+                meg_dir = rawdata_dir / f"sub-{participant_id}" / f"ses-{session_id}" / "meg"
+            else:
+                meg_dir = rawdata_dir / f"sub-{participant_id}" / "meg"
+            add_associated_empty_room_to_session(meg_dir, participant_id, session_id)
         
         # Summary for this participant
         logger.info(f"{'-'*60}")
