@@ -623,11 +623,19 @@ def build_apptainer_cmd(tool: str, **options) -> str:
         return cmd
     
     elif tool == "mri2print":
-        # MRI2Print for 3D printable models
+        # MRI2Print for 3D printable models - requires FreeSurfer outputs
+        bindings = [
+            f"-B {options['rawdata']}:/data:ro",
+            f"-B {options['derivatives']}:/derivatives"
+        ]
+        
+        # Add FreeSurfer subjects directory binding if available
+        if options.get('fs_subjects_dir'):
+            bindings.append(f"-B {options['fs_subjects_dir']}:/fsdir:ro")
+        
         cmd = (
             f"apptainer run "
-            f"-B {options['rawdata']}:/data:ro "
-            f"-B {options['derivatives']}:/derivatives "
+            f"{' '.join(bindings)} "
             f"{options['apptainer_img']} "
             f"/data /derivatives/{options['output_label']} participant "
             f"--participant-label {options['participant_label']}"
