@@ -241,11 +241,10 @@ def ensure_image_exists(
         tool_owner = "meldproject"
     elif tool == "cvrmap":
         tool_owner = "ln2t"
+    elif tool == "mri2print":
+        tool_owner = "ln2t"
     elif tool == "bids_validator":
         tool_owner = "bids"
-        tool = "validator"  # Docker image is bids/validator
-    elif tool == "mri2print":
-        tool_owner = "arovai"
     else:
         raise ValueError(f"Unsupported tool: {tool}")
     
@@ -623,29 +622,27 @@ def build_apptainer_cmd(tool: str, **options) -> str:
             cmd += f" {tool_args}"
         return cmd
     
-    elif tool == "bids_validator":
-        # BIDS Validator for dataset validation
-        # The container's entrypoint runs: deno -A ./bids-validator.js
-        # Must set --pwd /src since bids-validator.js is in /src/ directory
+    elif tool == "mri2print":
+        # MRI2Print for 3D printable models
         cmd = (
             f"apptainer run "
-            f"--pwd /src "
             f"-B {options['rawdata']}:/data:ro "
+            f"-B {options['derivatives']}:/derivatives "
             f"{options['apptainer_img']} "
-            f"/data"
+            f"/data /derivatives/{options['output_label']} participant "
+            f"--participant-label {options['participant_label']}"
         )
         if tool_args:
             cmd += f" {tool_args}"
         return cmd
     
-    elif tool == "mri2print":
-        # MRI to Print - convert FreeSurfer brain reconstructions to 3D-printable meshes
-        # Requires FreeSurfer derivatives as input
+    elif tool == "bids_validator":
+        # BIDS Validator for dataset validation
         cmd = (
             f"apptainer run "
-            f"-B {options['derivatives']}:/derivatives:ro "
-            f"-B {options['derivatives']}:/output "
-            f"{options['apptainer_img']}"
+            f"-B {options['rawdata']}:/data:ro "
+            f"{options['apptainer_img']} "
+            f"/data"
         )
         if tool_args:
             cmd += f" {tool_args}"
