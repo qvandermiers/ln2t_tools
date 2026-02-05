@@ -1157,7 +1157,6 @@ OUTPUT_DIR="{output_dir}"
 mkdir -p "$OUTPUT_DIR"
 
 # Find T1w image for this participant (handles both session and non-session datasets)
-# First try to find in session structure, then fall back to direct anat folder
 T1W_FILE=$(find "$HPC_RAWDATA/$DATASET-rawdata/$PARTICIPANT" -name "*_T1w.nii.gz" -type f 2>/dev/null | head -1)
 if [ -z "$T1W_FILE" ]; then
     echo "ERROR: No T1w file found for $PARTICIPANT in $HPC_RAWDATA/$DATASET-rawdata/$PARTICIPANT"
@@ -1167,11 +1166,10 @@ echo "Using T1w file: $T1W_FILE"
 
 # Extract relative path for container (remove the rawdata prefix)
 T1W_RELATIVE="${{T1W_FILE#$HPC_RAWDATA/$DATASET-rawdata/}}"
-T1W_CONTAINER="/data/$T1W_RELATIVE"
+T1W_CONTAINER="/rawdata/$T1W_RELATIVE"
 echo "Container path: $T1W_CONTAINER"
 
 # Determine subject ID for FreeSurfer output directory
-# If file has session info (e.g., sub-001_ses-01_T1w.nii.gz), include it in output name
 FILENAME=$(basename "$T1W_FILE")
 if [[ "$FILENAME" =~ ses-([^_]+) ]]; then
     SESSION="${{BASH_REMATCH[1]}}"
@@ -1190,21 +1188,22 @@ fi
 
 # Debug: Print command details before execution
 echo "=== FreeSurfer Debug Info ==="
-echo "SUBJECTS_DIR: $OUTPUT_DIR"
+echo "OUTPUT_DIR: $OUTPUT_DIR"
 echo "FS_SUBJECT_ID: $FS_SUBJECT_ID"
 echo "T1W_CONTAINER: $T1W_CONTAINER"
-echo "TOOL_ARGS: '$TOOL_ARGS'"
+echo "FS_LICENSE: $FS_LICENSE"
 echo "Apptainer image: {apptainer_img}"
 echo "============================="
 
-# Run FreeSurfer using apptainer run (not exec) which properly initializes the container
-# Pass arguments directly to recon-all
+# Run FreeSurfer - match the local processing command format exactly
+# Mount points: /rawdata (input), /derivatives (output), license at /usr/local/freesurfer/.license
+echo "Running: recon-all -all -subjid $FS_SUBJECT_ID -i $T1W_CONTAINER -sd /derivatives $TOOL_ARGS"
 apptainer run \\
-    -B "$HPC_RAWDATA/$DATASET-rawdata:/data:ro" \\
-    -B "$OUTPUT_DIR:/output" \\
-    -B "$FS_LICENSE:/opt/freesurfer/license.txt:ro" \\
+    -B "$FS_LICENSE:/usr/local/freesurfer/.license:ro" \\
+    -B "$HPC_RAWDATA/$DATASET-rawdata:/rawdata:ro" \\
+    -B "$OUTPUT_DIR:/derivatives" \\
     {apptainer_img} \\
-    recon-all -sd /output -s "$FS_SUBJECT_ID" -i "$T1W_CONTAINER" -all $TOOL_ARGS
+    recon-all -all -subjid "$FS_SUBJECT_ID" -i "$T1W_CONTAINER" -sd /derivatives $TOOL_ARGS
 """
     
     elif tool == "fastsurfer":
