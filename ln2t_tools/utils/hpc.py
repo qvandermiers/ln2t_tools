@@ -1188,6 +1188,22 @@ if [ -d "$OUTPUT_DIR/$FS_SUBJECT_ID" ] && [ -f "$OUTPUT_DIR/$FS_SUBJECT_ID/surf/
     exit 0
 fi
 
+# Debug: Print command details before execution
+echo "=== FreeSurfer Debug Info ==="
+echo "SUBJECTS_DIR: $OUTPUT_DIR"
+echo "FS_SUBJECT_ID: $FS_SUBJECT_ID"
+echo "T1W_CONTAINER: $T1W_CONTAINER"
+echo "TOOL_ARGS: '$TOOL_ARGS'"
+echo "Apptainer image: {apptainer_img}"
+echo "============================="
+
+# Build recon-all command (avoid issues with empty TOOL_ARGS)
+RECON_CMD="recon-all -s $FS_SUBJECT_ID -i $T1W_CONTAINER -all"
+if [ -n "$TOOL_ARGS" ]; then
+    RECON_CMD="$RECON_CMD $TOOL_ARGS"
+fi
+echo "Running command: $RECON_CMD"
+
 # Run FreeSurfer
 apptainer exec \\
     -B "$HPC_RAWDATA/$DATASET-rawdata:/data:ro" \\
@@ -1195,7 +1211,7 @@ apptainer exec \\
     -B "$FS_LICENSE:/opt/freesurfer/license.txt:ro" \\
     --env SUBJECTS_DIR=/output \\
     {apptainer_img} \\
-    recon-all -s "$FS_SUBJECT_ID" -i "$T1W_CONTAINER" -all $TOOL_ARGS
+    $RECON_CMD
 """
     
     elif tool == "fastsurfer":
