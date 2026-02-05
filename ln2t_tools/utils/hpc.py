@@ -1197,21 +1197,14 @@ echo "TOOL_ARGS: '$TOOL_ARGS'"
 echo "Apptainer image: {apptainer_img}"
 echo "============================="
 
-# Build recon-all command (avoid issues with empty TOOL_ARGS)
-RECON_CMD="recon-all -s $FS_SUBJECT_ID -i $T1W_CONTAINER -all"
-if [ -n "$TOOL_ARGS" ]; then
-    RECON_CMD="$RECON_CMD $TOOL_ARGS"
-fi
-echo "Running command: $RECON_CMD"
-
-# Run FreeSurfer - use bash -c to properly handle command string
-apptainer exec \\
+# Run FreeSurfer using apptainer run (not exec) which properly initializes the container
+# Pass arguments directly to recon-all
+apptainer run \\
     -B "$HPC_RAWDATA/$DATASET-rawdata:/data:ro" \\
     -B "$OUTPUT_DIR:/output" \\
     -B "$FS_LICENSE:/opt/freesurfer/license.txt:ro" \\
-    --env SUBJECTS_DIR=/output \\
     {apptainer_img} \\
-    bash -c "$RECON_CMD"
+    recon-all -sd /output -s "$FS_SUBJECT_ID" -i "$T1W_CONTAINER" -all $TOOL_ARGS
 """
     
     elif tool == "fastsurfer":
