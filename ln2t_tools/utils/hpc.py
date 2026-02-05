@@ -1204,14 +1204,14 @@ if [ -n "$TOOL_ARGS" ]; then
 fi
 echo "Running command: $RECON_CMD"
 
-# Run FreeSurfer
+# Run FreeSurfer - use bash -c to properly handle command string
 apptainer exec \\
     -B "$HPC_RAWDATA/$DATASET-rawdata:/data:ro" \\
     -B "$OUTPUT_DIR:/output" \\
     -B "$FS_LICENSE:/opt/freesurfer/license.txt:ro" \\
     --env SUBJECTS_DIR=/output \\
     {apptainer_img} \\
-    $RECON_CMD
+    bash -c "$RECON_CMD"
 """
     
     elif tool == "fastsurfer":
