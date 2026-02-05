@@ -1156,6 +1156,38 @@ FS_LICENSE="{fs_license}"
 OUTPUT_DIR="{output_dir}"
 mkdir -p "$OUTPUT_DIR"
 
+# Find T1w image for this participant (handles both session and non-session datasets)
+# First try to find in session structure, then fall back to direct anat folder
+T1W_FILE=$(find "$HPC_RAWDATA/$DATASET-rawdata/$PARTICIPANT" -name "*_T1w.nii.gz" -type f 2>/dev/null | head -1)
+if [ -z "$T1W_FILE" ]; then
+    echo "ERROR: No T1w file found for $PARTICIPANT in $HPC_RAWDATA/$DATASET-rawdata/$PARTICIPANT"
+    exit 1
+fi
+echo "Using T1w file: $T1W_FILE"
+
+# Extract relative path for container (remove the rawdata prefix)
+T1W_RELATIVE="${{T1W_FILE#$HPC_RAWDATA/$DATASET-rawdata/}}"
+T1W_CONTAINER="/data/$T1W_RELATIVE"
+echo "Container path: $T1W_CONTAINER"
+
+# Determine subject ID for FreeSurfer output directory
+# If file has session info (e.g., sub-001_ses-01_T1w.nii.gz), include it in output name
+FILENAME=$(basename "$T1W_FILE")
+if [[ "$FILENAME" =~ ses-([^_]+) ]]; then
+    SESSION="${{BASH_REMATCH[1]}}"
+    FS_SUBJECT_ID="${{PARTICIPANT}}_ses-${{SESSION}}"
+    echo "Multi-session dataset detected, using subject ID: $FS_SUBJECT_ID"
+else
+    FS_SUBJECT_ID="$PARTICIPANT"
+    echo "Single-session dataset, using subject ID: $FS_SUBJECT_ID"
+fi
+
+# Check if output already exists
+if [ -d "$OUTPUT_DIR/$FS_SUBJECT_ID" ] && [ -f "$OUTPUT_DIR/$FS_SUBJECT_ID/surf/rh.white" ]; then
+    echo "FreeSurfer output already exists for $FS_SUBJECT_ID, skipping"
+    exit 0
+fi
+
 # Run FreeSurfer
 apptainer exec \\
     -B "$HPC_RAWDATA/$DATASET-rawdata:/data:ro" \\
@@ -1163,7 +1195,7 @@ apptainer exec \\
     -B "$FS_LICENSE:/opt/freesurfer/license.txt:ro" \\
     --env SUBJECTS_DIR=/output \\
     {apptainer_img} \\
-    recon-all -s "$PARTICIPANT" -i "/data/$PARTICIPANT/anat/"*"_T1w.nii.gz" -all $TOOL_ARGS
+    recon-all -s "$FS_SUBJECT_ID" -i "$T1W_CONTAINER" -all $TOOL_ARGS
 """
     
     elif tool == "fastsurfer":
