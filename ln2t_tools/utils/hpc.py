@@ -1268,7 +1268,7 @@ WORK_DIR="$OUTPUT_DIR/work"
 mkdir -p "$OUTPUT_DIR" "$WORK_DIR"
 
 # Run QSIPrep
-apptainer exec \\
+apptainer run \\
     -B "$HPC_RAWDATA/$DATASET-rawdata:/data:ro" \\
     -B "$OUTPUT_DIR:/out" \\
     -B "$WORK_DIR:/work" \\
@@ -1279,6 +1279,7 @@ apptainer exec \\
     -w /work \\
     --skip-bids-validation \\
     $TOOL_ARGS
+
 """
     
     elif tool == "qsirecon":
@@ -1297,13 +1298,13 @@ WORK_DIR="$OUTPUT_DIR/work"
 mkdir -p "$OUTPUT_DIR" "$WORK_DIR"
 
 # Run QSIRecon
-apptainer exec \\
-    -B "$QSIPREP_DIR:/qsiprep:ro" \\
+apptainer run \\
+    -B "$QSIPREP_DIR:/data:ro" \\
     -B "$OUTPUT_DIR:/out" \\
     -B "$WORK_DIR:/work" \\
     --cleanenv \\
     {apptainer_img} \\
-    /qsiprep /out participant \\
+    /data /out participant \\
     --participant-label {participant_label} \\
     -w /work \\
     --skip-bids-validation \\
