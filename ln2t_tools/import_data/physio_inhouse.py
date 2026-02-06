@@ -616,7 +616,8 @@ def import_physio_inhouse(
     config: Dict,
     ds_initials: Optional[str] = None,
     session: Optional[str] = None,
-    matching_tolerance_sec: Optional[float] = None
+    matching_tolerance_sec: Optional[float] = None,
+    overwrite: bool = False
 ) -> bool:
     """Import physiological data to BIDS format using in-house processing.
     
@@ -640,6 +641,8 @@ def import_physio_inhouse(
     matching_tolerance_sec : Optional[float]
         Time tolerance in seconds for matching physio to fMRI runs.
         If not provided, uses config value or default (35.0s).
+    overwrite : bool
+        If True, overwrite existing participant data. If False, skip existing participants.
         
     Returns
     -------
@@ -687,6 +690,23 @@ def import_physio_inhouse(
             words = name_part.replace('_', ' ').split()
             ds_initials = ''.join([w[0].upper() for w in words if w])
             logger.info(f"Inferred dataset initials: {ds_initials}")
+    
+    # Filter out existing participants unless overwrite is enabled
+    if not overwrite:
+        new_participants = []
+        for participant in participant_labels:
+            participant_id = participant.replace('sub-', '')
+            subj_dir = rawdata_dir / f"sub-{participant_id}"
+            if subj_dir.exists():
+                logger.info(f"Participant {participant_id} already imported, skipping (use --overwrite to re-process)")
+            else:
+                new_participants.append(participant)
+        
+        if not new_participants:
+            logger.info("All participants already imported. Skipping physio import.")
+            return True
+        
+        participant_labels = new_participants
     
     # Process each participant
     success_count = 0

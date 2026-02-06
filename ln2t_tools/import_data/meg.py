@@ -1419,7 +1419,8 @@ def import_meg(
     rawdata_dir: Path,
     derivatives_dir: Optional[Path] = None,
     ds_initials: Optional[str] = None,
-    session: Optional[str] = None
+    session: Optional[str] = None,
+    overwrite: bool = False
 ) -> bool:
     """Import MEG data to BIDS format.
     
@@ -1439,6 +1440,8 @@ def import_meg(
         Dataset initials prefix (not used for MEG, kept for API consistency)
     session : Optional[str]
         Session label (without 'ses-' prefix) - if None, auto-detects sessions
+    overwrite : bool
+        If True, overwrite existing participant data. If False, skip existing participants.
     
     Returns
     -------
@@ -1488,6 +1491,23 @@ def import_meg(
     # Track success/failure
     success_count = 0
     failed_participants = []
+    
+    # Filter out existing participants unless overwrite is enabled
+    if not overwrite:
+        new_participants = []
+        for participant in participant_labels:
+            participant_id = participant.replace('sub-', '')
+            subj_dir = rawdata_dir / f"sub-{participant_id}"
+            if subj_dir.exists():
+                logger.info(f"Participant {participant_id} already imported, skipping (use --overwrite to re-process)")
+            else:
+                new_participants.append(participant)
+        
+        if not new_participants:
+            logger.info("All participants already imported. Skipping MEG import.")
+            return True
+        
+        participant_labels = new_participants
     
     # Process each participant
     for participant_label in participant_labels:

@@ -32,7 +32,8 @@ def import_physio(
     use_phys2bids: bool = False,
     physio_config: Optional[Path] = None,
     apptainer_dir: Path = Path("/opt/apptainer"),
-    matching_tolerance_sec: Optional[float] = None
+    matching_tolerance_sec: Optional[float] = None,
+    overwrite: bool = False
 ) -> bool:
     """Import physiological data to BIDS format.
     
@@ -63,6 +64,8 @@ def import_physio(
     matching_tolerance_sec : Optional[float]
         Time tolerance in seconds for matching physio recordings to fMRI runs.
         If not provided, uses config value or default (35.0s).
+    overwrite : bool
+        If True, overwrite existing participant data. If False, skip existing participants.
         
     Returns
     -------
@@ -99,7 +102,8 @@ def import_physio(
             config=config,
             ds_initials=ds_initials,
             session=session,
-            matching_tolerance_sec=matching_tolerance_sec
+            matching_tolerance_sec=matching_tolerance_sec,
+            overwrite=overwrite
         )
 
 

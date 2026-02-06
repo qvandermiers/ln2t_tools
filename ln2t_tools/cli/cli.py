@@ -346,6 +346,11 @@ by administrators in the rawdata directory.
         help="Deface anatomical images after import"
     )
     parser_import.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing imported data. By default, skips import if participant folder already exists"
+    )
+    parser_import.add_argument(
         "--import-env",
         type=Path,
         help="Path to Python virtual environment for import tools (default: ~/venvs/general_purpose_env)"

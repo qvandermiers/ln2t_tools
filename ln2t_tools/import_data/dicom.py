@@ -235,7 +235,8 @@ def import_dicom(
     compress_source: bool = False,
     deface: bool = False,
     venv_path: Optional[Path] = None,
-    keep_tmp_files: bool = False
+    keep_tmp_files: bool = False,
+    overwrite: bool = False
 ) -> bool:
     """Import DICOM data to BIDS format using dcm2bids.
     
@@ -263,6 +264,8 @@ def import_dicom(
         Path to virtual environment containing dcm2bids
     keep_tmp_files : bool
         Keep temporary files created by dcm2bids (tmp_dcm2bids directory)
+    overwrite : bool
+        If True, overwrite existing participant data. If False, skip existing participants.
         
     Returns
     -------
@@ -318,6 +321,23 @@ def import_dicom(
         if not participant_labels:
             logger.error(f"No participants found in {dicom_dir} matching pattern {ds_initials}*")
             return False
+    
+    # Filter out existing participants unless overwrite is enabled
+    if not overwrite:
+        new_participants = []
+        for participant in participant_labels:
+            participant_id = participant.replace('sub-', '')
+            subj_dir = rawdata_dir / f"sub-{participant_id}"
+            if subj_dir.exists():
+                logger.info(f"Participant {participant_id} already imported, skipping (use --overwrite to re-process)")
+            else:
+                new_participants.append(participant)
+        
+        if not new_participants:
+            logger.info("All participants already imported. Skipping DICOM import.")
+            return True
+        
+        participant_labels = new_participants
     
     # Setup virtual environment
     if venv_path is None:

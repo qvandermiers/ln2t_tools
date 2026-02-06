@@ -666,7 +666,8 @@ def import_mrs(
     ds_initials: Optional[str] = None,
     session: Optional[str] = None,
     compress_source: bool = True,
-    venv_path: Optional[Path] = None
+    venv_path: Optional[Path] = None,
+    overwrite: bool = False
 ) -> bool:
     """Import MRS data to BIDS format using spec2bids.
     
@@ -693,6 +694,8 @@ def import_mrs(
         If compression is successful, the original directory is deleted.
     venv_path : Optional[Path]
         Path to virtual environment containing spec2nii
+    overwrite : bool
+        If True, overwrite existing participant data. If False, skip existing participants.
         
     Returns
     -------
@@ -764,6 +767,23 @@ def import_mrs(
         if not participant_labels:
             logger.error(f"No participants found in {mrs_dir} matching pattern {ds_initials}*")
             return False
+    
+    # Filter out existing participants unless overwrite is enabled
+    if not overwrite:
+        new_participants = []
+        for participant in participant_labels:
+            participant_id = participant.replace('sub-', '')
+            subj_dir = rawdata_dir / f"sub-{participant_id}"
+            if subj_dir.exists():
+                logger.info(f"Participant {participant_id} already imported, skipping (use --overwrite to re-process)")
+            else:
+                new_participants.append(participant)
+        
+        if not new_participants:
+            logger.info("All participants already imported. Skipping MRS import.")
+            return True
+        
+        participant_labels = new_participants
     
     # Setup virtual environment
     if venv_path is None:

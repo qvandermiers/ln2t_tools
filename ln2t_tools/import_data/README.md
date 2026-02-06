@@ -141,14 +141,44 @@ ln2t_tools import \
 
 Uses a specific Python virtual environment instead of the default. Useful if you have multiple environments with different tool versions installed.
 
+### Skip Already-Imported Participants (Default Behavior)
+
+```bash
+ln2t_tools import \
+  --dataset <dataset-name> \
+  --participant-label 001 002 003
+```
+
+By default, the import tool checks if a participant already has imported data (i.e., if `~/rawdata/<dataset>-rawdata/sub-XXX/` exists). If data is found, that participant is **skipped** to avoid redundant re-processing.
+
+This is useful when:
+- Extending an existing dataset with new participants
+- Re-running import after fixing configuration files (previously imported data is preserved)
+- Safely resuming interrupted imports
+
+If you want to import participants that were already processed, you'll need to either:
+1. Delete their directories from rawdata, or
+2. Use the `--overwrite` flag (see below)
+
+### Overwrite Existing Data
+
+```bash
+ln2t_tools import \
+  --dataset <dataset-name> \
+  --participant-label 001 002 \
+  --overwrite
+```
+
+By default, participants with existing data are skipped. Use `--overwrite` to force re-processing of all specified participants, overwriting any existing BIDS-formatted data.
+
+**Warning**: This will replace existing derivatives, so use with caution if you have completed processing downstream of import (e.g., FreeSurfer, fMRI preprocessing).
+
 ### Custom Configuration Files
 
 ```bash
 ln2t_tools import \
   --dataset <dataset-name> \
   --participant-label 001 \
-  --dicom-config /path/to/custom/dcm2bids.json \
-  --mrs-config /path/to/custom/spec2bids.json \
   --physio-config /path/to/custom/physio.json
 ```
 
@@ -163,28 +193,26 @@ ln2t_tools import \
   --datatype <type> \
   --ds-initials <initials> \
   --session <session> \
+  --overwrite \
   --compress-source \
   --deface \
   --phys2bids \
   --import-env <path> \
-  --dicom-config <path> \
-  --mrs-config <path> \
   --physio-config <path>
 ```
 
 **Parameters**:
 - `--dataset`: Dataset name (required)
-- `--participant-label`: Space-separated participant IDs without 'sub-' prefix (required)
+- `--participant-label`: Space-separated participant IDs without 'sub-' prefix (optional if auto-discovering from DICOM)
 - `--datatype`: dicom, mrs, physio, or all (default: all)
-- `--ds-initials`: Dataset initials for matching source directories (optional)
+- `--ds-initials`: Dataset initials for matching source directories (optional, auto-inferred from dataset name)
 - `--session`: Session label without 'ses-' prefix (optional)
-- `--compress-source`: Create .tar.gz archives of source data (optional)
-- `--deface`: Run pydeface on anatomical images (optional)
-- `--phys2bids`: Use phys2bids instead of in-house physio processing (optional)
-- `--import-env`: Path to Python virtual environment (optional)
-- `--dicom-config`: Path to dcm2bids configuration (optional)
-- `--mrs-config`: Path to spec2bids configuration (optional)
-- `--physio-config`: Path to physio configuration (optional)
+- `--overwrite`: Force re-processing of participants even if they already have imported data (default: False)
+- `--compress-source`: Create .tar.gz archives of source data after successful import (default: False)
+- `--deface`: Run pydeface on anatomical images (default: False)
+- `--phys2bids`: Use phys2bids instead of in-house physio processing (default: False)
+- `--import-env`: Path to Python virtual environment with import tools (default: ~/venvs/general_purpose_env)
+- `--physio-config`: Path to physiological data configuration file (default: auto-detect)
 
 ## Configuration Files
 

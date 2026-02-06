@@ -385,6 +385,41 @@ def handle_import(args):
     
     import_success = {'dicom': False, 'mrs': False, 'physio': False, 'meg': False}
     
+    # Check if overwrite is enabled
+    overwrite = getattr(args, 'overwrite', False)
+    
+    # If not overwriting, check which participants already exist and filter them out
+    if not overwrite and args.participant_label:
+        existing_participants = []
+        new_participants = []
+        
+        for participant in args.participant_label:
+            participant_id = participant.replace('sub-', '')
+            subj_dir = rawdata_dir / f"sub-{participant_id}"
+            if subj_dir.exists():
+                existing_participants.append(participant)
+            else:
+                new_participants.append(participant)
+        
+        if existing_participants:
+            logger.warning(f"\n{'='*60}")
+            logger.warning("SKIPPING EXISTING PARTICIPANTS")
+            logger.warning(f"{'='*60}")
+            logger.warning(f"The following {len(existing_participants)} participant(s) already have imported data:")
+            for p in existing_participants:
+                logger.warning(f"  - {p}")
+            logger.warning("")
+            logger.warning("To overwrite existing data, use --overwrite flag:")
+            logger.warning(f"  ln2t_tools import --dataset {dataset} --overwrite --participant-label {' '.join(existing_participants)}")
+            logger.warning(f"{'='*60}\n")
+        
+        if new_participants:
+            logger.info(f"Will import {len(new_participants)} new participant(s): {new_participants}")
+            args.participant_label = new_participants
+        else:
+            logger.info("No new participants to import. Exiting.")
+            return
+    
     for datatype in datatypes:
         logger.info(f"\n{'='*60}")
         logger.info(f"Processing {datatype.upper()} data")
@@ -409,7 +444,8 @@ def handle_import(args):
                 compress_source=compress_source,
                 deface=getattr(args, 'deface', False),
                 venv_path=venv_path,
-                keep_tmp_files=getattr(args, 'keep_tmp_files', False)
+                keep_tmp_files=getattr(args, 'keep_tmp_files', False),
+                overwrite=overwrite
             )
         
         elif datatype == 'mrs':
@@ -429,7 +465,8 @@ def handle_import(args):
                 ds_initials=get_dataset_initials(dataset),
                 session=getattr(args, 'session', None),
                 compress_source=compress_source,
-                venv_path=venv_path
+                venv_path=venv_path,
+                overwrite=overwrite
             )
         
         elif datatype == 'physio':
@@ -452,7 +489,8 @@ def handle_import(args):
                 use_phys2bids=getattr(args, 'phys2bids', False),
                 physio_config=getattr(args, 'physio_config', None),
                 apptainer_dir=apptainer_dir,
-                matching_tolerance_sec=getattr(args, 'matching_tolerance_sec', None)
+                matching_tolerance_sec=getattr(args, 'matching_tolerance_sec', None),
+                overwrite=overwrite
             )
         
         elif datatype == 'meg':
@@ -471,7 +509,8 @@ def handle_import(args):
                 rawdata_dir=rawdata_dir,
                 derivatives_dir=derivatives_dir,
                 ds_initials=get_dataset_initials(dataset),
-                session=getattr(args, 'session', None)
+                session=getattr(args, 'session', None),
+                overwrite=overwrite
             )
     
     # Final summary
