@@ -157,6 +157,13 @@ def add_common_arguments(parser, exclude_participant_label=False):
              "These arguments are appended verbatim to the container command. "
              "Refer to each tool's documentation for available options."
     )
+    
+    parser.add_argument(
+        "--list-missing",
+        action="store_true",
+        help="List participants in rawdata that are missing from tool derivatives. "
+             "Shows which subjects need processing and provides a pre-typed command to run them."
+    )
 
 
 def add_hpc_arguments(parser):

@@ -1586,6 +1586,33 @@ def main(args=None) -> None:
             instance_manager = InstanceManager()
             instance_manager.list_active_instances()
             return
+        
+        # Check for list-missing operation (requires dataset but no processing)
+        if getattr(args, 'list_missing', False):
+            if not args.dataset:
+                logger.error("--dataset is required with --list-missing")
+                return
+            
+            # Import here to avoid circular imports
+            from ln2t_tools.utils.utils import get_missing_participants, print_missing_participants_report
+            
+            tool_name = getattr(args, 'tool', 'unknown')
+            tool_version = getattr(args, 'version', None)
+            output_label = getattr(args, 'output_label', None)
+            
+            missing = get_missing_participants(
+                dataset=args.dataset,
+                tool=tool_name,
+                tool_version=tool_version,
+                tool_output_label=output_label
+            )
+            
+            print_missing_participants_report(
+                dataset=args.dataset,
+                tool=tool_name,
+                missing_participants=missing
+            )
+            return
 
         # Handle import tool separately (doesn't follow the same pattern as processing tools)
         if hasattr(args, 'tool') and args.tool == 'import':

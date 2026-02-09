@@ -1058,3 +1058,154 @@ def get_dataset_initials(dataset: str) -> str:
         words = name_part.replace('_', ' ').split()
         return ''.join([w[0].upper() for w in words if w])
     return ''
+
+
+def get_missing_participants(
+    dataset: str,
+    tool: str,
+    rawdata_dir: Optional[Path] = None,
+    derivatives_dir: Optional[Path] = None,
+    tool_version: Optional[str] = None,
+    tool_output_label: Optional[str] = None
+) -> List[str]:
+    """Find participants in rawdata but missing from tool derivatives.
+    
+    Compares participants in rawdata/{dataset}-rawdata to those in
+    derivatives/{dataset}-derivatives/{tool_version}/{tool_output_label}.
+    
+    Parameters
+    ----------
+    dataset : str
+        Dataset name
+    tool : str
+        Tool name (freesurfer, fastsurfer, fmriprep, qsiprep, qsirecon, meld_graph, etc.)
+    rawdata_dir : Optional[Path]
+        Path to rawdata directory (default: ~/rawdata)
+    derivatives_dir : Optional[Path]
+        Path to derivatives directory (default: ~/derivatives)
+    tool_version : Optional[str]
+        Tool version (e.g., "7.3.2"). Used to build output directory name.
+        If None, will try to auto-detect from existing directories.
+    tool_output_label : Optional[str]
+        Custom output label (e.g., "my_custom_output"). If None, uses "{tool}_{version}".
+        
+    Returns
+    -------
+    List[str]
+        List of missing participant IDs (without 'sub-' prefix), sorted
+    """
+    from ln2t_tools.utils.defaults import DEFAULT_RAWDATA, DEFAULT_DERIVATIVES
+    
+    if rawdata_dir is None:
+        rawdata_dir = DEFAULT_RAWDATA
+    if derivatives_dir is None:
+        derivatives_dir = DEFAULT_DERIVATIVES
+    
+    rawdata_dir = Path(rawdata_dir).resolve()
+    derivatives_dir = Path(derivatives_dir).resolve()
+    
+    # Find rawdata participants
+    rawdata_dataset_dir = rawdata_dir / f"{dataset}-rawdata"
+    if not rawdata_dataset_dir.exists():
+        logger.error(f"Rawdata directory not found: {rawdata_dataset_dir}")
+        return []
+    
+    # Get all sub-* directories from rawdata
+    rawdata_participants = set()
+    for subdir in rawdata_dataset_dir.iterdir():
+        if subdir.is_dir() and subdir.name.startswith('sub-'):
+            participant_id = subdir.name[4:]  # Remove 'sub-' prefix
+            rawdata_participants.add(participant_id)
+    
+    if not rawdata_participants:
+        logger.warning(f"No participants found in {rawdata_dataset_dir}")
+        return []
+    
+    # Find tool derivatives participants
+    derivatives_dataset_dir = derivatives_dir / f"{dataset}-derivatives"
+    
+    # Build tool output directory name
+    if tool_output_label:
+        tool_output_dir = derivatives_dataset_dir / tool_output_label
+    else:
+        # Try to find matching tool output directory
+        # Pattern: {tool}_{version} or just {tool}
+        if not derivatives_dataset_dir.exists():
+            logger.warning(f"Derivatives directory not found: {derivatives_dataset_dir}")
+            return sorted(list(rawdata_participants))
+        
+        # Find the tool directory (could be multiple versions)
+        matching_dirs = list(derivatives_dataset_dir.glob(f"{tool}*"))
+        if not matching_dirs:
+            logger.warning(f"No {tool} output found in {derivatives_dataset_dir}")
+            return sorted(list(rawdata_participants))
+        
+        # Use the most recent one (by creation time) or specified version
+        if tool_version:
+            tool_output_dir = derivatives_dataset_dir / f"{tool}_{tool_version}"
+        else:
+            # Sort by modification time, get the most recent
+            tool_output_dir = sorted(matching_dirs, key=lambda x: x.stat().st_mtime, reverse=True)[0]
+    
+    # Get all sub-* directories from tool derivatives
+    tool_participants = set()
+    if tool_output_dir.exists():
+        for subdir in tool_output_dir.iterdir():
+            if subdir.is_dir() and subdir.name.startswith('sub-'):
+                participant_id = subdir.name[4:]  # Remove 'sub-' prefix
+                tool_participants.add(participant_id)
+    
+    # Find missing participants (in rawdata but not in tool derivatives)
+    missing = rawdata_participants - tool_participants
+    
+    return sorted(list(missing))
+
+
+def print_missing_participants_report(
+    dataset: str,
+    tool: str,
+    missing_participants: List[str],
+    command_prefix: str = "ln2t_tools"
+) -> None:
+    """Print a nicely formatted report of missing participants and suggested command.
+    
+    Parameters
+    ----------
+    dataset : str
+        Dataset name
+    tool : str
+        Tool name
+    missing_participants : List[str]
+        List of missing participant IDs
+    command_prefix : str
+        Command prefix (default: "ln2t_tools")
+    """
+    if not missing_participants:
+        logger.info(f"\n{'='*70}")
+        logger.info(f"✓ No missing participants for {tool}")
+        logger.info(f"All rawdata participants have {tool} derivatives")
+        logger.info(f"{'='*70}\n")
+        return
+    
+    logger.info(f"\n{'='*70}")
+    logger.info(f"Missing Participants for {tool.upper()}")
+    logger.info(f"{'='*70}")
+    logger.info(f"Dataset: {dataset}")
+    logger.info(f"Tool: {tool}")
+    logger.info(f"Missing: {len(missing_participants)} participant(s)\n")
+    
+    for participant in missing_participants:
+        logger.info(f"  - {participant}")
+    
+    logger.info(f"\n{'='*70}")
+    logger.info(f"Suggested Command (ready to copy-paste):")
+    logger.info(f"{'='*70}\n")
+    
+    # Build suggested command
+    cmd = f"{command_prefix} {tool} --dataset {dataset} --participant-label"
+    for participant in missing_participants:
+        cmd += f" {participant}"
+    
+    logger.info(cmd)
+    logger.info(f"\n{'='*70}\n")
+
