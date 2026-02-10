@@ -1303,9 +1303,9 @@ FS_SUBJECTS_DIR="{fs_output_dir}"
 WORK_DIR="$OUTPUT_DIR/work"
 mkdir -p "$OUTPUT_DIR" "$WORK_DIR"
 
-# Check that FreeSurfer directory exists
-if [ ! -d "$FS_SUBJECTS_DIR" ]; then
-    echo "ERROR: FreeSurfer outputs not found at $FS_SUBJECTS_DIR"
+# Check that FreeSurfer subject directory exists
+if [ ! -d "$FS_SUBJECTS_DIR/$PARTICIPANT" ]; then
+    echo "ERROR: FreeSurfer outputs not found for $PARTICIPANT at $FS_SUBJECTS_DIR/$PARTICIPANT"
     echo "fMRIPrep now requires pre-computed FreeSurfer outputs by default."
     echo "Either run FreeSurfer first or use --fmriprep-reconall to allow reconstruction."
     exit 1
