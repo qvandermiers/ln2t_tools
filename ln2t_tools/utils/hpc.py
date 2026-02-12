@@ -1318,7 +1318,7 @@ apptainer run \\
     -B "$HPC_RAWDATA/$DATASET-rawdata:/data:ro" \\
     -B "$OUTPUT_DIR:/out" \\
     -B "$WORK_DIR:/work" \\
-    -B "$FS_SUBJECTS_DIR:/fsdir:ro" \\
+    -B "$FS_SUBJECTS_DIR:/fsdir" \\
     -B "$FS_LICENSE:/opt/freesurfer/license.txt:ro" \\
     --env FS_LICENSE=/opt/freesurfer/license.txt \\
     --env SUBJECTS_DIR=/fsdir \\

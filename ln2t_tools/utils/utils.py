@@ -556,7 +556,7 @@ def build_apptainer_cmd(tool: str, **options) -> str:
         allow_reconall = options.get('allow_fs_reconall', False)
         
         if options.get('fs_subjects_dir'):
-            bindings.append(f"-B {options['fs_subjects_dir']}:/fsdir:ro")
+            bindings.append(f"-B {options['fs_subjects_dir']}:/fsdir")
             fs_flag = " --fs-subjects-dir /fsdir"
         elif not allow_reconall:
             # Default behavior: require pre-computed FreeSurfer outputs
@@ -720,7 +720,7 @@ def build_apptainer_cmd(tool: str, **options) -> str:
             raise ValueError("FreeSurfer subjects directory is required for mri2print")
         
         bindings = [
-            f"-B {options['fs_subjects_dir']}:/fsdir:ro",
+            f"-B {options['fs_subjects_dir']}:/fsdir",
             f"-B {options['derivatives']}:/derivatives"
         ]
         
