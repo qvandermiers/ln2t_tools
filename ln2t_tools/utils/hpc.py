@@ -1036,7 +1036,9 @@ def check_required_data(tool: str, dataset: str, participant_label: str, args: A
     
     # Check for QSIPrep outputs if running QSIRecon
     if tool == 'qsirecon':
-        qsiprep_version = getattr(args, 'qsiprep_version', '1.0.1')
+        from ln2t_tools.utils.defaults import DEFAULT_QSIPREP_VERSION
+        # QSIRecon requires QSIPrep v1.1.1
+        qsiprep_version = getattr(args, 'qsiprep_version', DEFAULT_QSIPREP_VERSION)
         qsiprep_path = f"{hpc_derivatives_check}/{dataset}-derivatives/qsiprep_{qsiprep_version}"
         
         logger.info(f"  [sub-{participant_label}] Checking QSIPrep outputs on HPC: {qsiprep_path}")
@@ -1692,10 +1694,11 @@ def print_download_command(tool: str, dataset: str, args: Any, job_ids: List[str
     hpc_derivatives = resolve_hpc_env_var(hpc_derivatives, username, hostname, keyfile, gateway)
     
     # Determine version and output directory
+    from ln2t_tools.utils.defaults import DEFAULT_QSIPREP_VERSION
     version = getattr(args, 'version', {
         'freesurfer': '7.3.2',
         'fmriprep': '25.1.4',
-        'qsiprep': '1.0.1',
+        'qsiprep': DEFAULT_QSIPREP_VERSION,
         'qsirecon': '1.1.1',
         'meld_graph': 'v2.2.3',
         'cvrmap': '4.3.1'
