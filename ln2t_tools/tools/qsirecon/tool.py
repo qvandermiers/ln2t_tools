@@ -24,14 +24,20 @@ class QSIReconTool(BaseTool):
     QSIRecon performs reconstruction and tractography from preprocessed
     DWI data (from QSIPrep). It supports various reconstruction pipelines
     including MRtrix3-based multi-shell multi-tissue CSD and ACT.
+    
+    IMPORTANT: QSIRecon requires QSIPrep v1.1.1 preprocessed data as input.
+    This is a hard requirement and cannot be changed.
     """
     
     name = "qsirecon"
     help_text = "QSIRecon diffusion MRI reconstruction"
+    required_qsiprep_version = DEFAULT_QSIPREP_VERSION  # QSIRecon requires this specific version
     description = """
 QSIRecon Diffusion MRI Reconstruction
 
-QSIRecon performs reconstruction and tractography from QSIPrep outputs.
+QSIRecon performs reconstruction and tractography from QSIPrep v1.1.1 outputs.
+QSIRecon requires QSIPrep v1.1.1 - other versions are not supported.
+
 Available reconstruction specifications include:
 
   - mrtrix_multishell_msmt_ACT-hsvs: Multi-shell multi-tissue CSD with ACT
@@ -47,7 +53,8 @@ Key outputs:
 
 Typical runtime: 2-4 hours per subject
 
-NOTE: QSIRecon requires QSIPrep preprocessed data as input.
+REQUIREMENT: QSIRecon requires QSIPrep v1.1.1 preprocessed data as input.
+Please ensure QSIPrep has been run with version 1.1.1 before running QSIRecon.
 """
     default_version = DEFAULT_QSIRECON_VERSION
     requires_gpu = False
@@ -119,9 +126,8 @@ NOTE: QSIRecon requires QSIPrep preprocessed data as input.
             logger.error("dataset_derivatives is required for QSIRecon requirement check")
             return False
         
-        # Use default QSIPrep version for checking
-        # If user specifies different version via --tool-args, container will validate
-        qsiprep_dir = dataset_derivatives / f"qsiprep_{DEFAULT_QSIPREP_VERSION}"
+        # QSIRecon requires QSIPrep v1.1.1 - this is a hard requirement
+        qsiprep_dir = dataset_derivatives / f"qsiprep_{cls.required_qsiprep_version}"
         
         if not qsiprep_dir.exists():
             logger.warning(
@@ -215,7 +221,8 @@ NOTE: QSIRecon requires QSIPrep preprocessed data as input.
         """
         from ln2t_tools.utils.utils import build_apptainer_cmd
         
-        qsiprep_version = DEFAULT_QSIPREP_VERSION
+        # QSIRecon requires QSIPrep v1.1.1 - this is a hard requirement
+        qsiprep_version = cls.required_qsiprep_version
         qsiprep_dir = dataset_derivatives / f"qsiprep_{qsiprep_version}"
         
         version = args.version or cls.default_version
