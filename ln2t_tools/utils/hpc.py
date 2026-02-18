@@ -1364,6 +1364,7 @@ apptainer run \\
         from ln2t_tools.utils.defaults import DEFAULT_QSIPREP_VERSION
         
         version = getattr(args, 'version', '1.1.1')
+        fs_license = getattr(args, 'hpc_fs_license', None) or '$HOME/licenses/license.txt'
         apptainer_img = f"{hpc_apptainer_dir}/pennlinc.qsirecon.{version}.sif"
         output_dir = f"$HPC_DERIVATIVES/$DATASET-derivatives/qsirecon_{version}"
         qsiprep_dir = f"$HPC_DERIVATIVES/$DATASET-derivatives/qsiprep_{DEFAULT_QSIPREP_VERSION}"
@@ -1371,6 +1372,7 @@ apptainer run \\
         
         script += f"""
 # QSIRecon setup
+FS_LICENSE="{fs_license}"
 OUTPUT_DIR="{output_dir}"
 QSIPREP_DIR="{qsiprep_dir}"
 CODE_DIR="{code_dir}"
@@ -1379,6 +1381,7 @@ mkdir -p "$OUTPUT_DIR" "$WORK_DIR"
 
 # Run QSIRecon
 apptainer run --containall \\
+    -B "$FS_LICENSE:/opt/freesurfer/license.txt" \\
     -B "$QSIPREP_DIR:/data:ro" \\
     -B "$OUTPUT_DIR:/out" \\
     -B "$WORK_DIR:/work" \\
@@ -1386,6 +1389,7 @@ apptainer run --containall \\
     {apptainer_img} \\
     /data /out participant \\
     --participant-label {participant_label} \\
+    --fs-license-file /opt/freesurfer/license.txt \\
     -w /work \\
     $TOOL_ARGS
 """
