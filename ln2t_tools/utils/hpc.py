@@ -1365,19 +1365,22 @@ apptainer run \\
         apptainer_img = f"{hpc_apptainer_dir}/pennlinc.qsirecon.{version}.sif"
         output_dir = f"$HPC_DERIVATIVES/$DATASET-derivatives/qsirecon_{version}"
         qsiprep_dir = f"$HPC_DERIVATIVES/$DATASET-derivatives/qsiprep_{DEFAULT_QSIPREP_VERSION}"
+        code_dir = f"$GLOBALSCRATCH/code/$DATASET-code"
         
         script += f"""
 # QSIRecon setup
 OUTPUT_DIR="{output_dir}"
 QSIPREP_DIR="{qsiprep_dir}"
+CODE_DIR="{code_dir}"
 WORK_DIR="$OUTPUT_DIR/work"
 mkdir -p "$OUTPUT_DIR" "$WORK_DIR"
 
 # Run QSIRecon
-apptainer run \\
+apptainer run --containall \\
     -B "$QSIPREP_DIR:/data:ro" \\
     -B "$OUTPUT_DIR:/out" \\
     -B "$WORK_DIR:/work" \\
+    -B "$CODE_DIR:/code:ro" \\
     {apptainer_img} \\
     /data /out participant \\
     --participant-label {participant_label} \\

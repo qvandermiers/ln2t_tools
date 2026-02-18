@@ -8,6 +8,7 @@ import atexit
 import json
 import socket
 import getpass
+import re
 from pathlib import Path
 from typing import List, Optional, Dict
 from warnings import warn
@@ -543,35 +544,34 @@ def build_apptainer_cmd(tool: str, **options) -> str:
         if "fs_license" not in options:
             raise ValueError("FreeSurfer license file path is required")
         
+        fs_subjects_dir = options.get('fs_subjects_dir')
+        
         # Build bindings
         bindings = [
-            f"-B {options['fs_license']}:/opt/freesurfer/license.txt",
+            f"-B {options['fs_license']}:/opt/freesurfer/license.txt:ro",
             f"-B {options['rawdata']}:/data:ro",
-            f"-B {options['derivatives']}:/derivatives"
+            f"-B {options['derivatives']}:/out"
         ]
         
-        # Add FreeSurfer subjects directory binding if available
-        # By default, require pre-computed FreeSurfer outputs (--fs-no-reconall)
-        # Users can override this with --fmriprep-reconall flag
-        allow_reconall = options.get('allow_fs_reconall', False)
+        # Environment variables for FreeSurfer
+        env_flags = "--env FS_LICENSE=/opt/freesurfer/license.txt"
         
-        if options.get('fs_subjects_dir'):
-            bindings.append(f"-B {options['fs_subjects_dir']}:/fsdir")
-            fs_flag = " --fs-subjects-dir /fsdir"
-        elif not allow_reconall:
-            # Default behavior: require pre-computed FreeSurfer outputs
-            fs_flag = " --fs-no-reconall"
-        else:
-            # User explicitly allowed reconstruction
-            fs_flag = ""
+        # Add FreeSurfer subjects directory binding if available
+        fs_args = ""
+        if fs_subjects_dir:
+            bindings.append(f"-B {fs_subjects_dir}:/fsdir:ro")
+            env_flags += " --env SUBJECTS_DIR=/fsdir"
+            fs_args = " --fs-subjects-dir /fsdir"
         
         cmd = (
             f"apptainer run "
             f"{' '.join(bindings)} "
+            f"{env_flags} "
+            f"--cleanenv "
             f"{options['apptainer_img']} "
-            f"/data /derivatives participant "
+            f"/data /out participant "
             f"--participant-label {options['participant_label']} "
-            f"--fs-license-file /opt/freesurfer/license.txt{fs_flag}"
+            f"--skip-bids-validation{fs_args}"
         )
         if tool_args:
             cmd += f" {tool_args}"
@@ -609,15 +609,38 @@ def build_apptainer_cmd(tool: str, **options) -> str:
         if not qsiprep_dir:
             raise ValueError("qsiprep_dir is required for QSIRecon")
         
+        # Extract version from apptainer image filename
+        img_filename = Path(options['apptainer_img']).name
+        version_match = re.search(r'qsirecon\.([^.]+)\.sif', img_filename)
+        version = version_match.group(1) if version_match else '1.1.1'
+        
+        # Extract dataset name from qsiprep_dir path
+        # qsiprep_dir is typically /path/to/derivatives/qsiprep_VERSION
+        qsiprep_path = Path(qsiprep_dir)
+        dataset_name = None
+        if qsiprep_path.parent.name.endswith('-derivatives'):
+            dataset_name = qsiprep_path.parent.name.replace('-derivatives', '')
+        
+        # Build bindings list
+        bindings = [
+            f"-B {options['fs_license']}:/opt/freesurfer/license.txt",
+            f"-B {qsiprep_dir}:/data:ro",
+            f"-B {options['derivatives']}:/out"
+        ]
+        
+        # Add code directory binding if dataset_name is available
+        if dataset_name:
+            code_dir = Path.home() / "code" / f"{dataset_name}-code"
+            bindings.append(f"-B {code_dir}:/code:ro")
+        
         cmd = (
-            f"apptainer run "
-            f"-B {options['fs_license']}:/opt/freesurfer/license.txt "
-            f"-B {qsiprep_dir}:/data:ro "
-            f"-B {options['derivatives']}:/out "
+            f"apptainer run --containall "
+            + " ".join(bindings) + " "
             f"{options['apptainer_img']} "
             f"/data /out participant "
             f"--participant-label {options['participant_label']} "
-            f"--fs-license-file /opt/freesurfer/license.txt"
+            f"--fs-license-file /opt/freesurfer/license.txt "
+            f"--skip-bids-validation"
         )
         if tool_args:
             cmd += f" {tool_args}"
