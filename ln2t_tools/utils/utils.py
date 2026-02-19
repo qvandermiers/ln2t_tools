@@ -640,7 +640,7 @@ def build_apptainer_cmd(tool: str, **options) -> str:
             bindings.append(f"-B {code_dir}:/code:ro")
         
         cmd = (
-            f"apptainer run --containall "
+            f"apptainer run --containall --writable-tmpfs "
             + " ".join(bindings) + " "
             f"{options['apptainer_img']} "
             f"/data /out participant "

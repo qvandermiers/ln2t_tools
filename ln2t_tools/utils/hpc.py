@@ -1380,7 +1380,7 @@ WORK_DIR="$OUTPUT_DIR/work"
 mkdir -p "$OUTPUT_DIR" "$WORK_DIR"
 
 # Run QSIRecon
-apptainer run --containall \\
+apptainer run --containall --writable-tmpfs \\
     -B "$FS_LICENSE:/opt/freesurfer/license.txt" \\
     -B "$QSIPREP_DIR:/data:ro" \\
     -B "$OUTPUT_DIR:/out" \\
