@@ -447,38 +447,6 @@ This means physiological recording started 40 seconds before the first fMRI volu
 
 ---
 
-### Processing Configuration (`processing_config.tsv`)
-
-**Purpose**: Specify which tool versions to use for each dataset (optional).
-
-**Location**: `~/rawdata/<dataset>-rawdata/processing_config.tsv`
-
-**What it does**:
-- Maps datasets to specific tool versions (FreeSurfer, fMRIPrep, QSIPrep, etc.)
-- Allows version control across multiple datasets in your system
-- Used by downstream processing pipelines to know which version to use
-- Format: Tab-separated values (TSV)
-
-**Example Configuration**:
-```tsv
-dataset	freesurfer	fmriprep	qsiprep
-2024-Gleaming_Lyrebird-cf70b1f72dd6	7.3.2	25.1.4	0.24.0
-2024-Shining_Pheasant-a1b2c3d4e5f6		25.1.4	
-2024-Bright_Falcon-f6e5d4c3b2a1	7.4.0		0.24.0
-```
-
-**Columns**:
-- `dataset`: Dataset name (must match exactly)
-- `freesurfer`: FreeSurfer version to use
-- `fmriprep`: fMRIPrep version to use
-- `qsiprep`: QSIPrep version to use
-- Other columns for other processing tools as needed
-
-**Notes**:
-- Leave blank if a tool should not be run for that dataset
-- Versions must match available container image versions
-- This file is optional - if not present, tools use default versions
-
 ## Requirements and Dependencies
 
 ### DICOM Import Requirements

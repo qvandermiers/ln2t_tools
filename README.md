@@ -21,11 +21,10 @@ ln2t_tools is a neuroimaging pipeline manager that supports multiple processing 
    - [QSIRecon](#qsirecon)
    - [MELD Graph](#meld-graph)
 5. [Finding Available Options](#finding-available-options)
-6. [Configuration-Based Processing](#configuration-based-processing)
-7. [Instance Management](#instance-management)
-8. [HPC Job Submission](#hpc-job-submission)
-9. [Command-line Completion](#command-line-completion)
-10. [Adding a New Tool](#adding-a-new-tool)
+6. [Instance Management](#instance-management)
+7. [HPC Job Submission](#hpc-job-submission)
+8. [Command-line Completion](#command-line-completion)
+9. [Adding a New Tool](#adding-a-new-tool)
 
 ---
 
@@ -93,7 +92,6 @@ All datasets are organized under your home directory:
 │       │       ├── sub-{id}_task-{name}_recording-cardiac_physio.json
 │       │       ├── sub-{id}_task-{name}_recording-respiratory_physio.tsv.gz
 │       │       └── sub-{id}_task-{name}_recording-respiratory_physio.json
-│       └── processing_config.tsv          # Optional pipeline configuration
 │
 ├── derivatives/
 │   └── {dataset}-derivatives/
@@ -1157,64 +1155,6 @@ ssh your_username@lyra.ulb.be sinfo
 
 ---
 
-## Configuration-Based Processing
-
-ln2t_tools supports configuration-based processing using a TSV file. Create a file named `processing_config.tsv` in your rawdata directory (`~/rawdata/processing_config.tsv`).
-
-### Configuration File Format
-
-```tsv
-dataset	freesurfer	fmriprep	qsiprep	qsirecon	meld_graph
-dataset1	7.3.2	25.1.4	1.0.1	1.1.1	v2.2.3
-dataset2		25.1.4			
-dataset3	7.4.0		1.0.1	1.1.1	
-dataset4	7.3.2				v2.2.3
-```
-
-**Rules**:
-- First column must be named `dataset`
-- Each subsequent column represents a tool
-- Cell values are tool versions
-- Empty cells = tool won't run for that dataset
-- Dependencies are automatically respected (e.g., qsirecon requires qsiprep)
-
-### Configuration Usage Examples
-
-```bash
-# Process all datasets according to config
-ln2t_tools
-
-# Process specific dataset from config
-ln2t_tools --dataset dataset1
-
-# Process specific participant from dataset (uses config for tools/versions)
-ln2t_tools --dataset dataset1 --participant-label 01
-
-# Override config: run specific tool regardless of config
-ln2t_tools freesurfer --dataset dataset2 --participant-label 01 --version 7.3.2
-```
-
-### Pipeline Dependencies in Config
-
-When using configuration files, tools are run in dependency order:
-
-1. **FreeSurfer** → Used by fMRIPrep (optional) and MELD Graph (required)
-2. **QSIPrep** → Required by QSIRecon
-
-Example workflow:
-```tsv
-dataset	freesurfer	qsiprep	qsirecon	meld_graph
-mydata	7.3.2	1.0.1	1.1.1	v2.2.3
-```
-
-This will automatically:
-1. Run FreeSurfer 7.3.2
-2. Run QSIPrep 1.0.1
-3. Run QSIRecon 1.1.1 (using QSIPrep output)
-4. Run MELD Graph v2.2.3 (using FreeSurfer output)
-
----
-
 ## Instance Management
 
 ln2t_tools includes built-in safeguards to prevent resource overload:
@@ -1763,22 +1703,6 @@ ln2t_tools qsirecon --dataset mydataset --participant-label 01
 
 # 5. Run MELD Graph (uses FreeSurfer output)
 ln2t_tools meld_graph --dataset mydataset --participant-label 01
-```
-
-### Using Configuration File (Recommended)
-
-```bash
-# Create config file
-cat > ~/rawdata/processing_config.tsv << EOF
-dataset	freesurfer	fmriprep	qsiprep	qsirecon	meld_graph
-mydataset	7.3.2	25.1.4	1.0.1	1.1.1	v2.2.3
-EOF
-
-# Process all participants for dataset
-ln2t_tools --dataset mydataset
-
-# Process specific participants
-ln2t_tools --dataset mydataset --participant-label 01 02 03
 ```
 
 ### Resume Processing with Missing Participants
