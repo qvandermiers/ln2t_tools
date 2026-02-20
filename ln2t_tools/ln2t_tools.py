@@ -1,7 +1,6 @@
 import os
 import logging
 import shutil
-import pandas as pd
 from typing import Optional, List, Dict
 from pathlib import Path
 import re
@@ -79,90 +78,8 @@ def get_available_datasets(rawdata_dir: str) -> List[str]:
     return [name[:-8] for name in os.listdir(rawdata_dir) 
             if name.endswith("-rawdata")]
 
-def read_processing_config(config_path: Path) -> pd.DataFrame:
-    """Read processing configuration from TSV file.
-    
-    Args:
-        config_path: Path to configuration TSV file
-        
-    Returns:
-        DataFrame with dataset processing configuration
-        
-    Expected format:
-        dataset    freesurfer    fmriprep
-        dataset1   7.3.2         23.1.3
-        dataset2                 25.1.4
-        dataset3   7.4.0         
-    """
-    if not config_path.exists():
-        logger.warning(f"Config file not found: {config_path}")
-        return pd.DataFrame()
-    
-    try:
-        config_df = pd.read_csv(config_path, sep='\t')
-        if 'dataset' not in config_df.columns:
-            raise ValueError("Config file must have a 'dataset' column")
-        
-        # Fill NaN values with empty strings
-        config_df = config_df.fillna('')
-        logger.info(f"Loaded config from {config_path}")
-        return config_df
-    except Exception as e:
-        logger.error(f"Error reading config file {config_path}: {e}")
-        return pd.DataFrame()
 
-def get_datasets_to_process(config_df: pd.DataFrame, dataset_filter: Optional[str] = None) -> List[str]:
-    """Get list of datasets to process based on config and filter.
-    
-    Args:
-        config_df: Configuration DataFrame
-        dataset_filter: Optional dataset name to filter by
-        
-    Returns:
-        List of dataset names to process
-    """
-    if config_df.empty:
-        # Fallback to all available datasets if no config
-        available = get_available_datasets(DEFAULT_RAWDATA)
-        if dataset_filter:
-            return [dataset_filter] if dataset_filter in available else []
-        return available
-    
-    datasets = config_df['dataset'].tolist()
-    
-    if dataset_filter:
-        return [dataset_filter] if dataset_filter in datasets else []
-    
-    return datasets
 
-def get_tools_for_dataset(config_df: pd.DataFrame, dataset: str) -> Dict[str, str]:
-    """Get tools and versions to run for a specific dataset.
-    
-    Args:
-        config_df: Configuration DataFrame
-        dataset: Dataset name
-        
-    Returns:
-        Dictionary mapping tool names to versions
-    """
-    if config_df.empty:
-        # Fallback behavior - return default tools
-        return {}
-    
-    dataset_row = config_df[config_df['dataset'] == dataset]
-    if dataset_row.empty:
-        logger.warning(f"Dataset {dataset} not found in config")
-        return {}
-    
-    tools = {}
-    row = dataset_row.iloc[0]
-    
-    # Check each column for tool specifications
-    for col in config_df.columns:
-        if col != 'dataset' and row[col] and str(row[col]).strip():
-            tools[col] = str(row[col]).strip()
-    
-    return tools
 
 def get_additional_contrasts(
     layout: BIDSLayout,
@@ -1758,32 +1675,26 @@ def main(args=None) -> None:
             handle_import(args)
             return
 
-        # Require --dataset for processing tools
+        # Require both --dataset and a tool for processing
         if not args.dataset:
             logger.error("--dataset is required. Please specify a dataset to process.")
             logger.info("Use 'ln2t_tools --list-datasets' to see available datasets.")
             return
 
-        # Read processing configuration
-        config_path = Path(DEFAULT_RAWDATA) / "processing_config.tsv"
-        config_df = read_processing_config(config_path)
-        
-        # Get datasets to process based on config and arguments
-        datasets_to_process = get_datasets_to_process(config_df, args.dataset)
-        
-        if not datasets_to_process:
-            logger.error(f"Dataset '{args.dataset}' not found in config or rawdata directory")
+        if not hasattr(args, 'tool') or not args.tool:
+            logger.error("A tool must be specified (e.g., freesurfer, fmriprep, qsiprep, etc.).")
             return
+
+        datasets_to_process = [args.dataset]
 
         # Collect all tools and participants for lock information
         all_tools = set()
         all_participants = set()
         
         for dataset in datasets_to_process:
-            tools_to_run = get_tools_for_dataset(config_df, dataset)
-            if not tools_to_run and hasattr(args, 'tool') and args.tool:
+            if hasattr(args, 'tool') and args.tool:
                 tools_to_run = {args.tool: getattr(args, 'version', None)}
-            all_tools.update(tools_to_run.keys() if tools_to_run else [])
+                all_tools.update(tools_to_run.keys())
             
             # Get participants for this dataset
             try:
@@ -1825,25 +1736,17 @@ def main(args=None) -> None:
         for dataset in datasets_to_process:
             logger.info(f"Processing dataset: {dataset}")
             
-            # Get tools to run for this dataset from config
-            tools_to_run = get_tools_for_dataset(config_df, dataset)
-            
-            if not tools_to_run:
-                # Fallback to command line tool if no config
-                if hasattr(args, 'tool') and args.tool:
-                    default_version = DEFAULT_FS_VERSION if args.tool == 'freesurfer' else \
-                                    DEFAULT_FASTSURFER_VERSION if args.tool == 'fastsurfer' else \
-                                    DEFAULT_FMRIPREP_VERSION if args.tool == 'fmriprep' else \
-                                    DEFAULT_QSIPREP_VERSION if args.tool == 'qsiprep' else \
-                                    DEFAULT_QSIRECON_VERSION if args.tool == 'qsirecon' else \
-                                    DEFAULT_MELDGRAPH_VERSION if args.tool == 'meld_graph' else \
-                                    DEFAULT_CVRMAP_VERSION if args.tool == 'cvrmap' else \
-                                    DEFAULT_BIDS_VALIDATOR_VERSION if args.tool == 'bids_validator' else \
-                                    DEFAULT_MRI2PRINT_VERSION if args.tool == 'mri2print' else None
-                    tools_to_run = {args.tool: getattr(args, 'version', None) or default_version}
-                else:
-                    logger.warning(f"No tools specified for dataset {dataset}, skipping")
-                    continue
+            # Determine tool and version from command line arguments
+            default_version = DEFAULT_FS_VERSION if args.tool == 'freesurfer' else \
+                            DEFAULT_FASTSURFER_VERSION if args.tool == 'fastsurfer' else \
+                            DEFAULT_FMRIPREP_VERSION if args.tool == 'fmriprep' else \
+                            DEFAULT_QSIPREP_VERSION if args.tool == 'qsiprep' else \
+                            DEFAULT_QSIRECON_VERSION if args.tool == 'qsirecon' else \
+                            DEFAULT_MELDGRAPH_VERSION if args.tool == 'meld_graph' else \
+                            DEFAULT_CVRMAP_VERSION if args.tool == 'cvrmap' else \
+                            DEFAULT_BIDS_VALIDATOR_VERSION if args.tool == 'bids_validator' else \
+                            DEFAULT_MRI2PRINT_VERSION if args.tool == 'mri2print' else None
+            tools_to_run = {args.tool: getattr(args, 'version', None) or default_version}
             
             logger.info(f"Tools to run for {dataset}: {tools_to_run}")
             

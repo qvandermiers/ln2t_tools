@@ -790,36 +790,50 @@ def import_mrs(
         
         participant_labels = new_participants
     
-    # Setup virtual environment
-    if venv_path is None:
-        venv_path = Path.home() / "venvs" / "general_purpose_env"
+    # Check for spec2bids executable (priority order)
+    spec2bids_path = None
+    venv_cmd = ""
     
-    activate_script = venv_path / "bin" / "activate"
-    if not activate_script.exists():
-        logger.warning(f"Virtual environment not found at {venv_path}, will try system spec2bids")
-        venv_cmd = ""
+    # Priority 1: Check /opt/ln2t/spec2bids/venv/spec2bids
+    opt_spec2bids = Path("/opt/ln2t/spec2bids/venv/spec2bids")
+    if opt_spec2bids.exists() and opt_spec2bids.is_file():
+        spec2bids_path = opt_spec2bids
+        logger.info(f"Using spec2bids from priority path: {spec2bids_path}")
     else:
-        venv_cmd = f". {activate_script} && "
+        # Priority 2: Setup virtual environment
+        if venv_path is None:
+            venv_path = Path.home() / "venvs" / "general_purpose_env"
+        
+        activate_script = venv_path / "bin" / "activate"
+        if not activate_script.exists():
+            logger.warning(f"Virtual environment not found at {venv_path}, will try system spec2bids")
+            venv_cmd = ""
+        else:
+            venv_cmd = f". {activate_script} && "
+        
+        # Priority 3: Check if spec2bids is available via which
+        check_cmd = f"{venv_cmd}which spec2bids"
+        result = subprocess.run(
+            check_cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            executable='/bin/bash'
+        )
+        
+        if result.returncode == 0:
+            logger.info(f"Found spec2bids via which: {result.stdout.strip()}")
+        else:
+            logger.error(
+                "spec2bids not found. Please install it:\n"
+                "  1. Build at /opt/ln2t/spec2bids/venv/spec2bids (priority)\n"
+                "  2. Install in virtual environment at ~/venvs/general_purpose_env\n"
+                "  3. Clone from https://github.com/arovai/spec2bids or install via pip"
+            )
+            return False
     
     # Create rawdata directory if needed
     rawdata_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Check if spec2bids is available
-    check_cmd = f"{venv_cmd}which spec2bids"
-    result = subprocess.run(
-        check_cmd,
-        shell=True,
-        capture_output=True,
-        text=True,
-        executable='/bin/bash'
-    )
-    
-    if result.returncode != 0:
-        logger.error(
-            "spec2bids not found. Please install it:\n"
-            "  Clone from https://github.com/arovai/spec2bids or install via pip if available"
-        )
-        return False
     
     # Process each participant
     success_count = 0
@@ -849,7 +863,12 @@ def import_mrs(
         logger.info(f"Running spec2bids for {participant_id}...")
         
         # Build spec2bids command
-        cmd = f"{venv_cmd}spec2bids -p {participant_id}"
+        # Use the full path if we found it in the priority location, otherwise use the venv command
+        if spec2bids_path:
+            cmd = f"{spec2bids_path} -p {participant_id}"
+        else:
+            cmd = f"{venv_cmd}spec2bids -p {participant_id}"
+        
         if session:
             cmd += f" -s {session}"
         cmd += f" -o {rawdata_dir} -d {source_path} -c {config_file}"
