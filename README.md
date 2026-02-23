@@ -1,44 +1,157 @@
-# ln2t-tools
-Useful tools for the LN2T
+<div align="center">
 
-## Overview
+# ln2t_tools
 
-ln2t_tools is a neuroimaging pipeline manager that supports multiple processing tools:
-- **FreeSurfer**: Cortical reconstruction and surface-based analysis ([official docs](https://surfer.nmr.mgh.harvard.edu/))
-- **fMRIPrep**: Functional MRI preprocessing ([official docs](https://fmriprep.org/))
-- **QSIPrep**: Diffusion MRI preprocessing ([official docs](https://qsiprep.readthedocs.io/))
-- **QSIRecon**: Diffusion MRI reconstruction ([official docs](https://qsiprep.readthedocs.io/))
-- **MELD Graph**: Lesion detection ([official docs](https://meld-graph.readthedocs.io/))
+**Neuroimaging pipeline manager for the [LN2T](https://ln2t.ulb.be/)**
 
-## Table of Contents
-1. [Data Organization](#data-organization)
-2. [Setup Requirements](#setup-requirements)
-3. [Quick Start](#quick-start)
-4. [Pipeline Usage Examples](#pipeline-usage-examples)
-   - [FreeSurfer](#freesurfer)
-   - [fMRIPrep](#fmriprep)
-   - [QSIPrep](#qsiprep)
-   - [QSIRecon](#qsirecon)
-   - [MELD Graph](#meld-graph)
-5. [Finding Available Options](#finding-available-options)
-6. [Instance Management](#instance-management)
-7. [HPC Job Submission](#hpc-job-submission)
-8. [Command-line Completion](#command-line-completion)
-9. [Adding a New Tool](#adding-a-new-tool)
+[How it works](#how-it-works) | [Installation](#intallation) | [How to use it](#how-to-use-it) | [Supported tools](#supported-tools) | [Using HPC](#using-hpc) | [Data organization](#data-organization) | [Bonuses](#bonuses)
 
----
+</div>
 
-## Data Organization
+## How it works
 
-ln2t_tools follows the [BIDS (Brain Imaging Data Structure) specification](https://bids-specification.readthedocs.io/) for organizing neuroimaging data.
+`ln2t_tools` is a Command Line Interface software that facilitates execution of standard neuroimaging pipelines. The core principles are:
+- Data are supposed to be organized following the [data organization](#data-organization) of the lab, which itself greatly relies on the [Brain Imaging Data Structure (BIDS)](#https://bids-specification.readthedocs.io/en/stable/).
+- A [selection of standard pipelines](#supported-tools) have been incorporated in `ln2t_tools` in the form of apptainer images. The installation of the software, for any valid version, is fully automated.
+- Outputs are tagged with pipeline name and version number.
+- The syntax of `ln2t_tools` is as follows:
+  ```bash
+  ln2t_tools <pipeline_name> --dataset <dataset_name> [options]
+  ```
+  There are two classes of options: those belonging to `ln2t_tools` and those that are directly passed to the pipeline; see below for more details and examples.
+- By default, the processing is done on the local machine, but `ln2t_tools` can be used to send the work to High-Performance Computing (HPC) Clusters such as [CECI](#https://www.ceci-hpc.be/); more info in the [corresponding section](#using-hpc).
+- More pipelines can be added easily thanks to the modular architecture of `ln2t_tools`, but this is not meant to be done by the standard end-user.
 
-### Dataset Naming Convention
+If you are interested in using this tool in your lab, make sure to read this documentation in full, in particular the sections describing the [data organization](#data-organization).
 
-Datasets follow a consistent naming pattern:
-- **Source data**: `{dataset}-sourcedata` (e.g., `myproject-sourcedata`)
-- **Raw BIDS data**: `{dataset}-rawdata` (e.g., `myproject-rawdata`)
-- **Derivatives**: `{dataset}-derivatives` (e.g., `myproject-derivatives`)
-- **Code**: `{dataset}-code` (e.g., `myproject-code`)
+## Installation
+
+If you are working on a computer of the lab, the software is already installed and you can skip this section.
+
+To install `ln2t_tools`, we strongly recommend you use a python virtual environment:
+```bash
+git clone git@github.com:ln2t/ln2t_tools.git
+cd ln2t_tools
+python -m venv venv
+source venv/bin/activate
+pip install -U pip
+pip install -U .
+```
+
+After installation, you can enable bash completion tools using
+```bash
+echo "source ~/.local/share/bash-completion/completions/ln2t_tools" >> ~/.bashrc
+```
+and then source `~/.bashrc`. More details in the [How it works](#how-it-works) section.
+
+`ln2t_tools` assumes a standardized folder structure to access raw data and to save outputs; see the [corresponding section](#data-organization) for more details.
+
+Moreover, ln2t_tools uses [Apptainer](https://apptainer.org/) containers to run neuroimaging pipelines. This ensures reproducibility and eliminates dependency conflicts.
+
+**Installation**:
+- Apptainer must be installed system-wide
+- Container images are stored in `/opt/apptainer` by default
+
+**Permissions**:
+The `/opt/apptainer` directory requires write access for pulling and caching container images:
+```bash
+# Create directory with proper permissions (requires sudo)
+sudo mkdir -p /opt/apptainer
+sudo chown -R $USER:$USER /opt/apptainer
+sudo chmod -R 755 /opt/apptainer
+```
+
+Alternatively, you can use a custom directory:
+```bash
+ln2t_tools freesurfer --dataset mydataset --apptainer-dir /path/to/custom/dir
+```
+
+Finally, several pipelines requires a valid license file (free academic license available at [FreeSurfer Registration](https://surfer.nmr.mgh.harvard.edu/registration.html)).
+
+**Default License Location**:
+```bash
+~/licenses/license.txt
+```
+
+To use a custom license location:
+```bash
+ln2t_tools freesurfer --dataset mydataset --fs-license /path/to/license.txt
+```
+
+## How to use it
+
+Open a terminal, start typing `ln2t_tools` and try the auto-completion mechanism using the `<TAB>` key: it will show you the available tools and guide you to complete the command (including dataset name discovery!).
+
+For instance, typing
+```bash
+ln2t_tools <TAB>  # show you the available tools
+```
+will show you the [supported tools](#supported-tools), e.g. `freesurfer` or `fmriprep`. Once the pipeline is completed, you can just continue using `<TAB>` to see what must be provided:
+```bash
+ln2t_tools freesurfer <TAB>  # auto-complete the next argument, in this case '--dataset'
+```
+This will auto-complete the mandatory argument `--dataset`. Further `<TAB>` presses will show you the datasets you have access to:
+```bash
+ln2t_tools freesurfer --dataset <TAB>  # show you the available datasets
+```
+Dataset names in the lab have the structure
+```bash
+YYYY-Custom_Name-abc123
+```
+The `YYYY` corresponds to the year of dataset creation; `Custom_Name` is an easy to remember, human-readable name (typically an adjective and an animal) and the end of the name, `abc123`, is a randomly generated sequence of characters. Againg, start typing then use `<TAB>` to auto-complete.
+
+**Example: `FreeSurfer`**
+
+To run `FreeSurfer` on the dataset `2025-Charming_Nightingale-9f9014dbdfae`, you can use
+```bash
+ln2t_tools freesurfer --dataset 2025-Charming_Nightingale-9f9014dbdfae
+```
+Pressing enter will:
+- select the default version for `FreeSurfer`
+- check that it is installed - if not, download and install it
+- check that the dataset exists and discover the available subjects
+- for each subject, check if `FreeSurfer` has already been run
+- launch sequentially the remaining subjects
+To understand where to find the outputs, make sure to read to [Data organisation](#data-organization) section.
+
+**Important Notice:**
+
+We **do not** recommend that you launch a tool on a whole dataset at once. Start first on a few subjects - for this, you can use the `ln2t_tools` option `--participant-label`:
+```bash
+ln2t_tools freesurfer --dataset 2025-Charming_Nightingale-9f9014dbdfae \
+            --participant-label 001 042
+```
+If the processing is successful and corresponds to your needs, then you may consider launching a full dataset run by omitting the `--participant-label` option.
+
+## Supported tools
+
+Here is the list of currently supported tools available to the lab members - for each tool, we show also the typesetting to use when using `ln2t_tools`:
+
+- **FreeSurfer** - `freesurfer`: Cortical reconstruction and surface-based analysis ([official docs](https://surfer.nmr.mgh.harvard.edu/))
+- **fMRIPrep** - `fmriprep`: Functional MRI preprocessing ([official docs](https://fmriprep.org/))
+- **QSIPrep** - `qsiprep`: Diffusion MRI preprocessing ([official docs](https://qsiprep.readthedocs.io/))
+- **QSIRecon** - `qsirecon`: Diffusion MRI reconstruction ([official docs](https://qsiprep.readthedocs.io/))
+- **MELD Graph** - `meld_graph`: Lesion detection ([official docs](https://meld-graph.readthedocs.io/))
+
+Note that there is another tool, `ln2t_tools import`, designed to deal with the BIDS-ification of source data. This tool is for administrators only (if you try it it will fail).
+
+## Using HPC
+
+The main neuroimaging tools in `ln2t_tools` like `FreeSurfer`, `fMRIPrep`, `QSIPrep` and `QSIRecon` can be submitted to HPC clusters using SLURM (Simple Linux Utility for Resource Management) using `--hpc`. A typical command look like
+```bash
+ln2t_tools <pipeline> --dataset <dataset> --hpc --hpc-host <host> --hpc-user <user> --hpc-time 10:00:00
+```
+`ln2t_tools` will then search for pre-installed SSH keys to interact with the cluster. Data, apptainer images and code will by default be assumed to be located on `$GLOBALSCRATCH`, which is typically an environment variable defined on the cluster. Logs of `ln2t_tools` are in your cluster home folder.
+
+## Data organization
+
+`ln2t_tools` essentially follows the [BIDS (Brain Imaging Data Structure) specification](https://bids-specification.readthedocs.io/) for organizing neuroimaging data, and what follow is essential for the tool to work:
+
+- **Raw data**: `~/rawdata/{dataset}-rawdata` | This is where your original data are stored. You should have read-only permissions for safety.
+- **Derivatives**: `~/derivatives/{dataset}-derivatives` | This is where `ln2t_tools` will write (and in some cases, read) outputs of the selected pipeline. For instance, for `FreeSurfer` version `7.2.0`, you will find the results in `~/derivatives/{dataset}-derivatives/freesurfer_7.2.0/sub-*`.
+- **Code**: `~/code/{dataset}-code` | The golden spot to put your custom code and configurations. We recommend that you keep there a `README.md` file with copies of the command lines you use - this can be very useful to keep track of your work or to re-run analyzes. Moreover, this folder is made available to the tools that require a configuration file (such a `qsirecon`).
+
+A part from that, there is also a similar structure for the source data (data as exported from the scanner or any other recording device), but these are not generally made available to the users - all you need should be in the raw data.
 
 ### Directory Structure
 
@@ -110,172 +223,22 @@ All datasets are organized under your home directory:
                 └── dataset_description.json
 ```
 
-**Key Points**:
-- **sourcedata**: Original, unmodified data from the scanner
-- **rawdata**: BIDS-formatted data, ready for processing
-- **derivatives**: Processed outputs from analysis pipelines
-- **code**: Analysis code and pipeline-specific configurations
+## Bonuses
 
-For more details on BIDS structure, see the [BIDS Specification](https://bids-specification.readthedocs.io/).
+### Tool-Specific Arguments with --tool-args
 
----
+`ln2t_tools` uses a pass-through argument pattern for tool-specific options. This allows the tools to be updated independently of `ln2t_tools`, and gives you access to the full range of options each tool supports.
 
-## Setup Requirements
-
-### Apptainer (formerly Singularity)
-
-ln2t_tools uses [Apptainer](https://apptainer.org/) containers to run neuroimaging pipelines. This ensures reproducibility and eliminates dependency conflicts.
-
-**Installation**:
-- Apptainer must be installed system-wide
-- Requires sudo/root access for installation
-- Container images are stored in `/opt/apptainer/` by default
-
-**Permissions**:
-The `/opt/apptainer/` directory requires write access for pulling and caching container images:
-```bash
-# Create directory with proper permissions (requires sudo)
-sudo mkdir -p /opt/apptainer
-sudo chown -R $USER:$USER /opt/apptainer
-sudo chmod -R 755 /opt/apptainer
-```
-
-Alternatively, you can use a custom directory:
-```bash
-ln2t_tools freesurfer --dataset mydataset --apptainer-dir /path/to/custom/dir
-```
-
-### FreeSurfer License
-
-FreeSurfer requires a valid license file (free academic license available at [FreeSurfer Registration](https://surfer.nmr.mgh.harvard.edu/registration.html)).
-
-**Default License Location**:
-```bash
-~/licenses/license.txt
-```
-
-To use a custom license location:
-```bash
-ln2t_tools freesurfer --dataset mydataset --fs-license /path/to/license.txt
-```
-
-### Internet Connection
-
-An active internet connection is required for:
-- Downloading container images (first run only)
-- Downloading MELD Graph model weights (one-time setup)
-- Accessing template spaces and atlases
-
----
-
-## Quick Start
-
-```bash
-# Install
-pip install -e .
-
-# List available datasets
-ln2t_tools --list-datasets
-
-# Run a basic pipeline
-ln2t_tools freesurfer --dataset mydataset --participant-label 01
-```
-
----
-
-## Tool-Specific Arguments with --tool-args
-
-ln2t_tools uses a pass-through argument pattern for tool-specific options. This allows the tools to be updated independently of ln2t_tools, and gives you access to the full range of options each tool supports.
-
-### How it Works
-
-Core arguments (dataset, participant, version, HPC options) are handled by ln2t_tools. Tool-specific arguments are passed verbatim to the container using `--tool-args`:
+Core arguments (dataset, participant, version, HPC options) are handled by `ln2t_tools`. Tool-specific arguments are passed verbatim to the container using `--tool-args`:
 
 ```bash
 ln2t_tools <tool> --dataset mydataset --participant-label 01 --tool-args "<tool-specific-arguments>"
 ```
-
-### Examples
-
-#### FreeSurfer
+For instance, here what you shoud do to use `qsiprep` with the (mandatory) argument `--output-resolution`:
 ```bash
-# Skip surface reconstruction (segmentation only)
-ln2t_tools freesurfer --dataset mydataset --participant-label 01 \
-    --tool-args "-parallel"
-```
-
-#### FastSurfer
-```bash
-# Run segmentation only (fast mode, ~5 min on GPU)
-ln2t_tools fastsurfer --dataset mydataset --participant-label 01 \
-    --tool-args "--seg-only --threads 4"
-
-# Run on CPU with 3T atlas
-ln2t_tools fastsurfer --dataset mydataset --participant-label 01 \
-    --tool-args "--device cpu --3T --threads 8"
-```
-
-#### fMRIPrep
-```bash
-# Skip FreeSurfer reconstruction with specific output spaces
-ln2t_tools fmriprep --dataset mydataset --participant-label 01 \
-    --tool-args "--fs-no-reconall --output-spaces MNI152NLin2009cAsym:res-2 fsaverage:den-10k"
-
-# Set number of threads
-ln2t_tools fmriprep --dataset mydataset --participant-label 01 \
-    --tool-args "--nprocs 8 --omp-nthreads 4"
-```
-
-#### QSIPrep
-```bash
-# Basic preprocessing with output resolution
 ln2t_tools qsiprep --dataset mydataset --participant-label 01 \
-    --tool-args "--output-resolution 1.25 --denoise-method dwidenoise"
-
-# DWI-only processing
-ln2t_tools qsiprep --dataset mydataset --participant-label 01 \
-    --tool-args "--output-resolution 2.0 --dwi-only"
+    --tool-args "--output-resolution 1.5"
 ```
-
-#### QSIRecon
-```bash
-# Tractography reconstruction
-ln2t_tools qsirecon --dataset mydataset --participant-label 01 \
-    --tool-args "--recon-spec mrtrix_multishell_msmt_ACT-hsvs"
-```
-
-#### MELD Graph
-```bash
-# Run with harmonization
-ln2t_tools meld_graph --dataset mydataset --participant-label 01 \
-    --tool-args "--harmonize --harmo-code H1"
-
-# Skip feature extraction (if already computed)
-ln2t_tools meld_graph --dataset mydataset --participant-label 01 \
-    --tool-args "--skip-feature-extraction"
-```
-
-#### CVRmap
-```bash
-# Specific task with ROI probe
-ln2t_tools cvrmap --dataset mydataset --participant-label 01 \
-    --tool-args "--task gas --space MNI152NLin2009cAsym"
-
-# Using ROI-based probe
-ln2t_tools cvrmap --dataset mydataset --participant-label 01 \
-    --tool-args "--roi-probe --roi-coordinates 0 -52 26 --roi-radius 6"
-```
-
-### Finding Available Options
-
-Each tool has its own documentation for available options:
-- **FreeSurfer**: `recon-all --help` or [FreeSurfer Wiki](https://surfer.nmr.mgh.harvard.edu/fswiki/recon-all)
-- **FastSurfer**: [FastSurfer Documentation](https://deep-mi.org/research/fastsurfer/)
-- **fMRIPrep**: `fmriprep --help` or [fMRIPrep Documentation](https://fmriprep.org/en/stable/usage.html)
-- **QSIPrep**: `qsiprep --help` or [QSIPrep Documentation](https://qsiprep.readthedocs.io/)
-- **QSIRecon**: [QSIRecon Documentation](https://qsiprep.readthedocs.io/)
-- **MELD Graph**: [MELD Graph Documentation](https://meld-graph.readthedocs.io/)
-- **CVRmap**: [CVRmap Documentation](https://github.com/arovai/cvrmap)
 
 ### Finding Missing Participants
 
@@ -283,280 +246,6 @@ The `--list-missing` flag helps identify which participants in your dataset stil
 - Resuming incomplete pipelines after errors
 - Managing large cohorts with multiple tools
 - Generating copy-paste commands to process missing participants
-
-#### Basic Usage
-
-```bash
-# Show missing participants for a tool
-ln2t_tools <tool> --dataset mydataset --list-missing
-```
-
-#### Example Output
-
-```bash
-$ ln2t_tools freesurfer --dataset mydataset --list-missing
-
-FreeSurfer Processing Status for mydataset
-============================================
-Processed participants: 8
-Missing participants: 5
-
-Missing Participant IDs:
-  sub-05
-  sub-08
-  sub-12
-  sub-15
-  sub-19
-
-To process missing participants, run:
-  ln2t_tools freesurfer --dataset mydataset --participant-label 05 08 12 15 19
-```
-
-#### With Multiple Tools
-
-```bash
-# Check missing for fMRIPrep
-ln2t_tools fmriprep --dataset mydataset --list-missing
-
-# Check missing for QSIPrep
-ln2t_tools qsiprep --dataset mydataset --list-missing
-
-# Check missing for MELD Graph
-ln2t_tools meld_graph --dataset mydataset --list-missing
-```
-
-#### How It Works
-
-The `--list-missing` flag:
-1. Scans the rawdata directory for all participant IDs
-2. Checks the tool's derivatives directory for completed outputs
-3. Compares the two to identify missing participants
-4. Generates a ready-to-use command for processing missing subjects
-5. Automatically detects tool version from your setup
-
----
-
-## Pipeline Usage Examples
-
-### FreeSurfer
-
-FreeSurfer performs cortical reconstruction and surface-based morphometric analysis.
-
-#### Default Values
-- **Version**: `7.3.2`
-- **Output directory**: `~/derivatives/{dataset}-derivatives/freesurfer_7.3.2/`
-- **Container**: `freesurfer/freesurfer:7.3.2`
-
-#### Basic Usage
-
-```bash
-# Process single participant
-ln2t_tools freesurfer --dataset mydataset --participant-label 01
-
-# Process multiple participants
-ln2t_tools freesurfer --dataset mydataset --participant-label 01 02 03
-
-# Process all participants in dataset
-ln2t_tools freesurfer --dataset mydataset
-```
-
-#### Advanced Options
-
-```bash
-# Use specific FreeSurfer version
-ln2t_tools freesurfer --dataset mydataset --participant-label 01 --version 7.4.0
-
-# Custom output label
-ln2t_tools freesurfer --dataset mydataset --participant-label 01 --output-label my_freesurfer_run
-
-# Custom FreeSurfer license location
-ln2t_tools freesurfer --dataset mydataset --participant-label 01 --fs-license /path/to/license.txt
-
-# Custom Apptainer images directory
-ln2t_tools freesurfer --dataset mydataset --participant-label 01 --apptainer-dir /custom/path/apptainer
-```
-
-**Notes**:
-- FreeSurfer automatically detects T2w and FLAIR images if available and uses them for pial surface refinement
-- Handles multi-session and multi-run data automatically using BIDS entities
-
----
-
-### fMRIPrep
-
-fMRIPrep performs robust preprocessing of functional MRI data.
-
-#### Default Values
-- **Version**: `25.1.4`
-- **Output directory**: `~/derivatives/{dataset}-derivatives/fmriprep_25.1.4/`
-- **Container**: `nipreps/fmriprep:25.1.4`
-- **Output spaces**: `MNI152NLin2009cAsym:res-2`
-
-#### Basic Usage
-
-```bash
-# Process single participant
-ln2t_tools fmriprep --dataset mydataset --participant-label 01
-
-# Process multiple participants
-ln2t_tools fmriprep --dataset mydataset --participant-label 01 02 03
-```
-
-#### Advanced Options
-
-```bash
-# Use specific version
-ln2t_tools fmriprep --dataset mydataset --participant-label 01 --version 24.0.1
-
-# Allow FreeSurfer reconstruction if pre-computed outputs don't exist
-ln2t_tools fmriprep --dataset mydataset --participant-label 01 --fmriprep-reconall
-
-# Custom output spaces
-ln2t_tools fmriprep --dataset mydataset --participant-label 01 \
-  --tool-args "--output-spaces MNI152NLin2009cAsym:res-1 fsaverage:den-10k"
-
-# Combine multiple options
-ln2t_tools fmriprep --dataset mydataset --participant-label 01 \
-  --fmriprep-reconall \
-  --tool-args "--output-spaces MNI152NLin2009cAsym:res-2 MNI152NLin6Asym:res-2"
-```
-
-**Important Notes**:
-- **fMRIPrep now requires pre-computed FreeSurfer outputs by default**
-  - If FreeSurfer outputs are not found, processing will be skipped
-  - Run FreeSurfer first: `ln2t_tools freesurfer --dataset mydataset --participant-label 01`
-  - Or use `--fmriprep-reconall` flag to allow fMRIPrep to run FreeSurfer reconstruction
-- Automatically uses existing FreeSurfer outputs if found (from `freesurfer_{version}` directory)
-
----
-
-### QSIPrep
-
-QSIPrep performs preprocessing of diffusion MRI data.
-
-#### Default Values
-- **Version**: `1.0.1`
-- **Output directory**: `~/derivatives/{dataset}-derivatives/qsiprep_1.0.1/`
-- **Container**: `pennlinc/qsiprep:1.0.1`
-
-#### Basic Usage
-
-QSIPrep-specific options must be passed via `--tool-args`. The `--output-resolution`
-option is required by QSIPrep.
-
-```bash
-# Process single participant (--output-resolution is required)
-ln2t_tools qsiprep --dataset mydataset --participant-label 01 \
-  --tool-args "--output-resolution 1.25"
-
-# Process multiple participants
-ln2t_tools qsiprep --dataset mydataset --participant-label 01 02 03 \
-  --tool-args "--output-resolution 1.5"
-```
-
-#### Advanced Options
-
-```bash
-# Use specific version
-ln2t_tools qsiprep --dataset mydataset --participant-label 01 \
-  --version 0.24.0 --tool-args "--output-resolution 1.25"
-
-# Different denoising methods
-ln2t_tools qsiprep --dataset mydataset --participant-label 01 \
-  --tool-args "--output-resolution 1.25 --denoise-method patch2self"
-
-ln2t_tools qsiprep --dataset mydataset --participant-label 01 \
-  --tool-args "--output-resolution 1.25 --denoise-method none"
-
-# DWI-only processing (skip anatomical)
-ln2t_tools qsiprep --dataset mydataset --participant-label 01 \
-  --tool-args "--output-resolution 1.25 --dwi-only"
-
-# Anatomical-only processing
-ln2t_tools qsiprep --dataset mydataset --participant-label 01 \
-  --tool-args "--output-resolution 1.25 --anat-only"
-
-# Full example with multiple options
-ln2t_tools qsiprep --dataset mydataset --participant-label 01 \
-  --version 1.0.1 \
-  --tool-args "--output-resolution 1.5 --denoise-method dwidenoise"
-```
-
-**Common QSIPrep Options** (pass via `--tool-args`):
-- `--output-resolution <mm>`: Isotropic voxel size in mm (REQUIRED, e.g., 1.25, 1.5, 2.0)
-- `--denoise-method <method>`: dwidenoise, patch2self, or none
-- `--dwi-only`: Process only DWI data (skip anatomical)
-- `--anat-only`: Process only anatomical data
-- `--nprocs <n>`: Number of processes
-- `--omp-nthreads <n>`: Number of OpenMP threads
-
-**Notes**:
-- QSIPrep automatically skips BIDS validation
-- Requires DWI data in BIDS format
-
----
-
-### QSIRecon
-
-QSIRecon performs reconstruction and tractography on QSIPrep preprocessed data.
-
-#### Default Values
-- **Version**: `1.1.1`
-- **Output directory**: `~/derivatives/{dataset}-derivatives/qsirecon_1.1.1/`
-- **Container**: `pennlinc/qsirecon:1.1.1`
-- **QSIPrep version**: `1.0.1` (default input)
-- **Reconstruction spec**: `mrtrix_multishell_msmt_ACT-hsvs`
-
-#### Basic Usage
-
-```bash
-# Process single participant (uses default QSIPrep version 1.0.1)
-ln2t_tools qsirecon --dataset mydataset --participant-label 01
-
-# Process multiple participants
-ln2t_tools qsirecon --dataset mydataset --participant-label 01 02 03
-```
-
-#### Advanced Options
-
-```bash
-# Use specific QSIPrep version as input
-ln2t_tools qsirecon --dataset mydataset --participant-label 01 --qsiprep-version 0.24.0
-
-# Use specific QSIRecon version
-ln2t_tools qsirecon --dataset mydataset --participant-label 01 --version 1.0.0
-
-# Different reconstruction pipelines
-# Single-shell reconstruction
-ln2t_tools qsirecon --dataset mydataset --participant-label 01 \
-  --recon-spec mrtrix_singleshell_ss3t_ACT-hsvs
-
-# Multi-shell without ACT
-ln2t_tools qsirecon --dataset mydataset --participant-label 01 \
-  --recon-spec mrtrix_multishell_msmt
-
-# DSI Studio pipeline
-ln2t_tools qsirecon --dataset mydataset --participant-label 01 \
-  --recon-spec dsi_studio_gqi
-
-# Full example combining options
-ln2t_tools qsirecon --dataset mydataset --participant-label 01 \
-  --qsiprep-version 1.0.1 \
-  --version 1.1.1 \
-  --recon-spec mrtrix_multishell_msmt_ACT-hsvs
-```
-
-**Prerequisites**:
-- QSIPrep must be run first
-- QSIRecon looks for preprocessed data in `qsiprep_{version}` directory
-
-**Error Messages**:
-If QSIPrep output is not found, you'll see:
-```
-QSIPrep output not found at: ~/derivatives/dataset-derivatives/qsiprep_1.0.1
-QSIRecon requires QSIPrep preprocessed data as input.
-Please run QSIPrep first, or specify the correct QSIPrep version with --qsiprep-version.
-```
 
 ---
 
@@ -623,7 +312,7 @@ This downloads ~2GB of model weights into the MELD data directory.
 
 #### Step 2: Harmonization (Optional but Recommended)
 
-Harmonization adjusts for scanner/sequence differences and improves prediction accuracy. 
+Harmonization adjusts for scanner/sequence differences and improves prediction accuracy.
 
 **Requirements**:
 - At least 20 subjects from the same scanner/protocol
@@ -779,382 +468,6 @@ Results are saved in:
 
 ---
 
-## HPC Job Submission
-
-All neuroimaging tools in ln2t_tools can be submitted to HPC clusters using SLURM (Simple Linux Utility for Resource Management). This feature is not limited to MELD Graph—you can use `--slurm` with any tool: FreeSurfer, fMRIPrep, QSIPrep, QSIRecon, FastSurfer, CVRmap, etc.
-
-### Basic SLURM Submission
-
-```bash
-# FreeSurfer on HPC
-ln2t_tools freesurfer --dataset mydataset \
-  --participant-label 01 \
-  --slurm \
-  --slurm-user your_username \
-  --slurm-apptainer-dir /path/to/apptainer/images/on/cluster
-
-# fMRIPrep on HPC
-ln2t_tools fmriprep --dataset mydataset \
-  --participant-label 01 \
-  --slurm \
-  --slurm-user your_username \
-  --slurm-apptainer-dir /path/to/apptainer/images/on/cluster
-
-# QSIPrep on HPC
-ln2t_tools qsiprep --dataset mydataset \
-  --participant-label 01 \
-  --tool-args "--output-resolution 1.25" \
-  --slurm \
-  --slurm-user your_username \
-  --slurm-apptainer-dir /path/to/apptainer/images/on/cluster
-```
-
-### Advanced Options with Custom Resources
-
-```bash
-# SLURM with GPU allocation
-ln2t_tools fastsurfer --dataset mydataset \
-  --participant-label 01 02 03 \
-  --slurm \
-  --slurm-user your_username \
-  --slurm-apptainer-dir /path/to/apptainer/images \
-  --slurm-gpus 1 \
-  --slurm-mem 16G \
-  --slurm-time 4:00:00 \
-  --slurm-partition gpu
-
-# MELD Graph on HPC with harmonization
-ln2t_tools meld_graph --dataset mydataset \
-  --participant-label 01 \
-  --harmo-code H1 \
-  --slurm \
-  --slurm-user your_username \
-  --slurm-apptainer-dir /path/to/apptainer/images \
-  --slurm-gpus 1 \
-  --slurm-mem 32G
-```
-
-### SLURM Options
-
-All tools support the following SLURM options:
-
-| Option | Description | Required | Default |
-|--------|-------------|----------|---------|
-| `--slurm` | Enable SLURM job submission | No | Disabled |
-| `--slurm-user` | Your username on the HPC cluster | **Yes** (with `--slurm`) | - |
-| `--slurm-host` | HPC hostname to SSH into | No | `lyra.ulb.be` |
-| `--slurm-apptainer-dir` | Path to apptainer images on cluster | **Yes** (with `--slurm`) | - |
-| `--slurm-rawdata` | Path to rawdata directory on cluster | No | `$GLOBALSCRATCH/rawdata` |
-| `--slurm-derivatives` | Path to derivatives on cluster | No | `$GLOBALSCRATCH/derivatives` |
-| `--slurm-fs-license` | Path to FreeSurfer license on cluster | No | `$HOME/licenses/license.txt` |
-| `--slurm-fs-version` | FreeSurfer version on cluster (for tools requiring it) | No | `7.2.0` |
-| `--slurm-partition` | SLURM partition to submit to | No | None (cluster default) |
-| `--slurm-time` | Job time limit (format: HH:MM:SS) | No | `1:00:00` |
-| `--slurm-mem` | Memory allocation (format: Num[G,M]) | No | `32G` |
-| `--slurm-gpus` | Number of GPUs to allocate | No | `1` |
-
-### Examples by Tool
-
-#### FreeSurfer on HPC
-```bash
-ln2t_tools freesurfer --dataset mydataset --participant-label 01 \
-  --slurm --slurm-user your_username \
-  --slurm-apptainer-dir /path/to/apptainer
-```
-
-#### fMRIPrep on HPC with Custom Resources
-```bash
-ln2t_tools fmriprep --dataset mydataset --participant-label 01 02 03 \
-  --slurm --slurm-user your_username \
-  --slurm-apptainer-dir /path/to/apptainer \
-  --slurm-mem 48G --slurm-time 6:00:00
-```
-
-#### QSIPrep + QSIRecon Pipeline on HPC
-```bash
-# First run QSIPrep
-ln2t_tools qsiprep --dataset mydataset --participant-label 01 \
-  --tool-args "--output-resolution 1.25" \
-  --slurm --slurm-user your_username \
-  --slurm-apptainer-dir /path/to/apptainer \
-  --slurm-gpus 1 --slurm-mem 32G
-
-# Then run QSIRecon (uses QSIPrep output)
-ln2t_tools qsirecon --dataset mydataset --participant-label 01 \
-  --slurm --slurm-user your_username \
-  --slurm-apptainer-dir /path/to/apptainer
-```
-
-#### FastSurfer with GPU on HPC
-```bash
-ln2t_tools fastsurfer --dataset mydataset --participant-label 01 02 03 \
-  --slurm --slurm-user your_username \
-  --slurm-apptainer-dir /path/to/apptainer \
-  --slurm-gpus 1 --slurm-partition gpu --slurm-time 4:00:00
-```
-
-#### MELD Graph on HPC
-```bash
-ln2t_tools meld_graph --dataset mydataset --participant-label 01 \
-  --slurm --slurm-user your_username \
-  --slurm-apptainer-dir /path/to/apptainer \
-  --slurm-gpus 1 --slurm-mem 32G
-```
-
-### How HPC Submission Works
-
-When you use the `--slurm` flag:
-
-1. **Script Generation**: ln2t_tools generates a SLURM batch script with your job parameters
-2. **Remote Submission**: The script is transferred to your HPC cluster and submitted via SSH
-3. **Job Monitoring**: Job ID is printed so you can monitor progress with `squeue`
-4. **Automatic Cleanup**: Job scripts are cleaned up after completion
-
-### Troubleshooting HPC Submission
-
-**SSH Connection Issues**:
-```bash
-# Verify SSH access to your cluster
-ssh your_username@lyra.ulb.be
-# or with custom host
-ln2t_tools freesurfer --dataset mydataset --slurm-host custom.hpc.org ...
-```
-
-**Missing Apptainer Directory**:
-```bash
-# Ensure directory exists on cluster and contains images
-ssh your_username@lyra.ulb.be ls /path/to/apptainer/
-
-# Copy images if needed
-scp freesurfer_7.3.2.sif your_username@lyra.ulb.be:/path/to/apptainer/
-```
-
-**Job Not Starting**:
-```bash
-# Check SLURM queue status on cluster
-ssh your_username@lyra.ulb.be squeue -u your_username
-# or check job details
-ssh your_username@lyra.ulb.be sinfo
-```
-
----
-
-#### Advanced Options Summary
-
-```bash
-ln2t_tools meld_graph --dataset DATASET [OPTIONS]
-
-Required:
-  --dataset DATASET                Dataset name
-
-Participant Selection:
-  --participant-label ID [ID ...]  One or more participant IDs
-
-MELD Workflow:
-  --download-weights               Download model weights (run once)
-  --harmonize                      Compute harmonization parameters only
-  --harmo-code CODE                Harmonization code (e.g., H1, H2)
-
-FreeSurfer:
-  --fs-version VERSION             FreeSurfer version (default: 7.2.0, max: 7.2.0)
-  --use-precomputed-fs             Use existing FreeSurfer outputs (skips recon-all, runs feature extraction)
-  --skip-feature-extraction        Skip MELD feature extraction (only if .sm3.mgh files already exist)
-
-SLURM Options:
-  --slurm                          Submit to SLURM cluster
-  --slurm-user USER                HPC username (required with --slurm)
-  --slurm-apptainer-dir PATH       Apptainer images directory on cluster (required with --slurm)
-  --slurm-gpus N                   Number of GPUs (default: 1)
-  --slurm-mem SIZE                 Memory allocation (default: 32G)
-  --slurm-time TIME                Time limit (default: 1:00:00)
-
-Version:
-  --version VERSION                MELD Graph version (default: v2.2.3)
-```
-
----
-
-#### Prerequisites & Important Notes
-
-**Prerequisites**:
-- BIDS-formatted T1w (and optionally FLAIR) images in `~/rawdata/{dataset}-rawdata/`
-- For using precomputed FreeSurfer: outputs in `~/derivatives/{dataset}-derivatives/freesurfer_7.2.0/`
-- For harmonization: `participants.tsv` with demographic data (age, sex, group) and 20+ subjects from same scanner
-
-**Important Limitations**:
-- **FreeSurfer version must be 7.2.0 or earlier** (7.3+ not compatible)
-- **Not appropriate for**: tuberous sclerosis, hippocampal sclerosis, hypothalamic hamartoma, periventricular heterotopia, previous resections
-- **Research use only**: Not FDA/EMA approved for clinical diagnosis
-- **T1w recommended**: FLAIR may increase false positives
-
-**Error Messages**:
-```
-No FreeSurfer output found for participant 01.
-MELD Graph requires FreeSurfer recon-all to be completed first.
-Note: MELD Graph requires FreeSurfer 7.2.0 or earlier (current default: 7.2.0).
-```
-→ Run FreeSurfer 7.2.0 first or use `--use-precomputed-fs` if outputs exist
-
-```
-Harmonization recommended with at least 20 subjects. You have 15 subjects.
-```
-→ Add more subjects for reliable harmonization or proceed without harmonization
-
----
-
-## Checking HPC Job Status
-
-After submitting jobs with `--hpc`, you can monitor their progress without needing to SSH into the cluster. ln2t_tools automatically tracks submitted jobs and provides an easy way to check their status.
-
-### Basic Status Checking
-
-```bash
-# Show status of recent jobs (last 20 submitted)
-ln2t_tools --hpc-status
-
-# Show status of a specific job ID
-ln2t_tools --hpc-status 12345678
-
-# Show status of multiple job IDs
-ln2t_tools --hpc-status 12345678 12345679 12345680
-
-# Show all jobs for a specific dataset
-ln2t_tools --hpc-status --dataset mydataset
-
-# Show all jobs for a specific tool
-ln2t_tools --hpc-status --tool freesurfer
-```
-
-### Job Status Categories
-
-The status output shows jobs organized by their current state:
-
-- **⏳ PENDING**: Job is waiting to start (in SLURM queue)
-- **▶️ RUNNING**: Job is currently executing
-- **✅ COMPLETED**: Job finished successfully
-- **❌ FAILED**: Job encountered an error
-- **⏱️ TIMEOUT**: Job exceeded time limit
-- **⛔ CANCELLED**: Job was cancelled by user or system
-
-### Example Output
-
-```bash
-$ ln2t_tools --hpc-status
-
-======================================================================
-HPC Job Status Summary
-======================================================================
-
-⏳ PENDING:
-  Job 12345678: freesurfer / mydataset / sub-01
-  Job 12345679: fmriprep / mydataset / sub-02
-
-▶️  RUNNING:
-  Job 12345680: qsiprep / mydataset / sub-03
-
-✅ COMPLETED:
-  Job 12345677: freesurfer / mydataset / sub-02
-
-❌ FAILED/ERROR:
-  Job 12345676: meld_graph (Timed out)
-    Tool: meld_graph, Dataset: mydataset, Sub: sub-01
-    Reason: TIME_LIMIT_EXCEEDED
-
-======================================================================
-Total: 6 jobs
-  Pending: 2
-  Running: 1
-  Completed: 1
-  Failed: 2
-======================================================================
-```
-
-### Detailed Job Information
-
-For more detailed information about a specific job, you can also manually query the HPC cluster if you have SSH access:
-
-```bash
-# Check a specific job on the cluster
-ssh your_username@lyra.ulb.be squeue -j 12345678
-
-# View job history and exit codes
-ssh your_username@lyra.ulb.be sacct -j 12345678 --format=JobID,State,ExitCode,Reason,Start,End,Elapsed
-
-# View job output/error logs on cluster
-ssh your_username@lyra.ulb.be cat ~/ln2t_hpc_jobs/{dataset}/{tool}_{participant}*_{job_id}.{out,err}
-```
-
-### Job History
-
-ln2t_tools keeps a local record of all submitted jobs in `~/.ln2t_tools/hpc_jobs.json`. This allows you to check job status even after logging out of your local machine or restarting.
-
-```bash
-# View the job history file (JSON format)
-cat ~/.ln2t_tools/hpc_jobs.json
-
-# Filter recent jobs with jq (if installed)
-jq '.[] | select(.submit_time > "2025-02-01") | {job_id, tool, dataset, state}' ~/.ln2t_tools/hpc_jobs.json
-```
-
-### Practical Workflow Example
-
-```bash
-# 1. Submit jobs to HPC cluster
-ln2t_tools freesurfer --dataset mydataset --participant-label 01 02 03 \
-  --hpc --hpc-user your_username --hpc-apptainer-dir /path/to/apptainer
-
-# Output shows: ✓ Job submitted successfully! Job IDs: 12345678, 12345679, 12345680
-
-# 2. Check status immediately
-ln2t_tools --hpc-status
-
-# Output: 3 pending jobs
-
-# 3. Check later (wait 30 minutes)
-ln2t_tools --hpc-status
-
-# Output: 1 running, 2 pending
-
-# 4. Check dataset-specific jobs
-ln2t_tools --hpc-status --dataset mydataset
-
-# 5. If issues detected, check detailed job logs
-ssh your_username@lyra.ulb.be sacct -j 12345678
-
-# 6. If job timed out, increase time limit and resubmit
-ln2t_tools freesurfer --dataset mydataset --participant-label 01 \
-  --hpc --hpc-time 48:00:00 --hpc-user your_username --hpc-apptainer-dir /path/to/apptainer
-```
-
-### Troubleshooting Job Status Queries
-
-**Jobs not showing in status**:
-- Jobs are stored locally in `~/.ln2t_tools/hpc_jobs.json`
-- Deleting this file will remove job history
-- Job status requires either the local job file or SSH access to the cluster
-
-**Want live status updates from cluster**:
-```bash
-# Provide HPC credentials for live query
-ln2t_tools --hpc-status 12345678 \
-  --hpc-user your_username \
-  --hpc-hostname lyra.ulb.be
-```
-
-**Job appears stuck**:
-```bash
-# Check more details on the cluster
-ssh your_username@lyra.ulb.be scontrol show job 12345678
-
-# Check cluster queue status
-ssh your_username@lyra.ulb.be squeue
-
-# Check system resources
-ssh your_username@lyra.ulb.be sinfo
-```
-
----
-
 ## Instance Management
 
 ln2t_tools includes built-in safeguards to prevent resource overload:
@@ -1163,8 +476,6 @@ ln2t_tools includes built-in safeguards to prevent resource overload:
 - **Lock files**: Stored in `/tmp/ln2t_tools_locks/` with detailed JSON metadata
 - **Automatic cleanup**: Removes stale lock files from terminated processes
 - **Graceful handling**: Shows helpful messages when limits are reached
-
-### Lock File Information
 
 Each instance creates a lock file with:
 - Process ID (PID)
@@ -1175,52 +486,6 @@ Each instance creates a lock file with:
 - Username
 - Start time
 
-### Instance Management Commands
-
-```bash
-# Check currently running instances
-ln2t_tools --list-instances
-
-# Set custom maximum instances limit
-ln2t_tools --max-instances 5 --dataset mydataset
-
-# Example output of --list-instances:
-# Found 2 active instances:
-#   1. PID: 1217649, User: arovai@dataserver.local
-#      Dataset: mydataset, Tool: qsiprep
-#      Participants: sub-01, sub-02
-#      Running for: 3245.2s, Lock: ln2t_tools_1217649.lock
-```
-
----
-
-## Command-line Completion
-
-To enable command-line completion with tab:
-
-### Installation
-
-```bash
-# Install the package
-pip install -e .
-
-# The completion script is automatically installed to:
-# ~/.local/share/bash-completion/completions/ln2t_tools
-```
-
-### Activation
-
-```bash
-# Temporary activation (current session only)
-source ~/.local/share/bash-completion/completions/ln2t_tools
-
-# Permanent activation (add to ~/.bashrc)
-echo "source ~/.local/share/bash-completion/completions/ln2t_tools" >> ~/.bashrc
-source ~/.bashrc
-```
-
----
-
 ## Data Import
 
 ln2t_tools includes import utilities to convert source data to BIDS format:
@@ -1228,44 +493,24 @@ ln2t_tools includes import utilities to convert source data to BIDS format:
 - **DICOM**: Convert DICOM files to BIDS using dcm2bids with optional defacing
 - **MRS**: Convert MRS data to BIDS using spec2nii
 - **Physio**: Convert GE physiological monitoring data to BIDS using phys2bids
+- **MEG**
+
+Each dataype import will use a dedicated configuration file, located by default in the source data folder.
 
 ### DICOM Import
 
 Convert DICOM files to BIDS-compliant NIfTI format with optional defacing:
 
 ```bash
-# Basic DICOM import
 ln2t_tools import --dataset mydataset --participant-label 01 --datatype dicom
-
-# Import with defacing (opt-in)
-ln2t_tools import --dataset mydataset --participant-label 01 --datatype dicom --deface
-
-# Import multiple participants
-ln2t_tools import --dataset mydataset --participant-label 01 02 03 --datatype dicom
-
-# Compress source data after successful import
-ln2t_tools import --dataset mydataset --participant-label 01 --datatype dicom --compress-source
 ```
-
-**Notes**:
-- Defacing is **opt-in** via `--deface` flag (not applied by default)
-- Uses pydeface v2.0.6 via Singularity container
-- Adds metadata to JSON sidecars: `Defaced: true`, `DefacingMethod`, `DefacingTimestamp`
-- Auto-creates `dataset_description.json` if missing (required by pydeface)
 
 ### MRS Import
 
 Convert Magnetic Resonance Spectroscopy data to BIDS format:
 
 ```bash
-# Import MRS data
 ln2t_tools import --dataset mydataset --participant-label 01 --datatype mrs
-
-# Import with session
-ln2t_tools import --dataset mydataset --participant-label 01 --datatype mrs --session 01
-
-# Import and compress source
-ln2t_tools import --dataset mydataset --participant-label 01 --datatype mrs --compress-source
 ```
 
 ### Physio Import
@@ -1278,22 +523,6 @@ Convert GE physiological monitoring data (respiratory, PPG) to BIDS format with 
 # Import physio data using in-house processing (default)
 # Config file will be auto-detected from sourcedata/configs/physio.json
 ln2t_tools import --dataset mydataset --participant-label 01 --datatype physio
-
-# Or specify a custom config file location
-ln2t_tools import --dataset mydataset --participant-label 01 --datatype physio \
-  --physio-config /path/to/custom_config.json
-
-# Import with session
-ln2t_tools import --dataset mydataset --participant-label 01 --datatype physio \
-  --session 01
-
-# Import and compress source
-ln2t_tools import --dataset mydataset --participant-label 01 --datatype physio \
-  --compress-source
-
-# Use phys2bids instead (optional)
-ln2t_tools import --dataset mydataset --participant-label 01 --datatype physio \
-  --phys2bids
 ```
 
 #### Configuration File
@@ -1353,7 +582,7 @@ StartTime = -(30s + (2.0s × 5)) = -40.0s
 - `PhysioTimeTolerance`: Numeric value
 - `PhysioTimeToleranceUnits`: One of:
   - `"s"` for seconds
-  - `"min"` for minutes  
+  - `"min"` for minutes
   - `"h"` for hours (default)
 - Example: `"PhysioTimeTolerance": 2, "PhysioTimeToleranceUnits": "h"` for 2-hour tolerance
 - If config file is present and these fields are defined, they will be used; otherwise, default 1 hour is applied with a warning
@@ -1651,163 +880,6 @@ Example source structure:
 
 ---
 
-### Completion Features
-
-The completion script provides intelligent suggestions for:
-
-- **Tools**: `freesurfer`, `fmriprep`, `qsiprep`, `qsirecon`, `meld_graph`
-- **Datasets**: Auto-detects from `~/rawdata/*-rawdata` directories
-- **Participants**: Auto-detects from selected dataset's BIDS structure
-- **Tool-specific options**: Shows relevant flags based on selected tool
-
-#### Examples
-
-```bash
-# Tab after command shows all tools
-ln2t_tools <TAB>
-# → freesurfer fmriprep qsiprep qsirecon meld_graph
-
-# Tab after tool shows --dataset option
-ln2t_tools freesurfer <TAB>
-# → --dataset
-
-# Tab after --dataset shows available datasets
-ln2t_tools freesurfer --dataset <TAB>
-# → dataset1 dataset2 dataset3
-
-# Tab after --participant-label shows participants in that dataset
-ln2t_tools freesurfer --dataset mydataset --participant-label <TAB>
-# → 01 02 03 04 05
-
-# Tab shows tool-specific options
-ln2t_tools qsiprep --<TAB>
-# → --tool-args (QSIPrep options passed via --tool-args)
-
-ln2t_tools qsirecon --<TAB>
-# → --qsiprep-version --recon-spec
-```
-
----
-
-## Common Workflows
-
-### Full Pipeline for Single Participant
-
-```bash
-# 1. Run FreeSurfer
-ln2t_tools freesurfer --dataset mydataset --participant-label 01
-
-# 2. Run fMRIPrep (uses FreeSurfer output)
-ln2t_tools fmriprep --dataset mydataset --participant-label 01
-
-# 3. Run QSIPrep (--output-resolution required via --tool-args)
-ln2t_tools qsiprep --dataset mydataset --participant-label 01 \
-  --tool-args "--output-resolution 1.25"
-
-# 4. Run QSIRecon (uses QSIPrep output)
-ln2t_tools qsirecon --dataset mydataset --participant-label 01
-
-# 5. Run MELD Graph (uses FreeSurfer output)
-ln2t_tools meld_graph --dataset mydataset --participant-label 01
-```
-
-### Resume Processing with Missing Participants
-
-If processing was interrupted or failed for some participants, you can easily identify and reprocess them:
-
-```bash
-# List missing participants for FreeSurfer
-ln2t_tools freesurfer --dataset mydataset --list-missing
-
-# Output shows command to run missing participants
-# To run, simply copy-paste the suggested command from output
-
-# Or manually specify missing participants
-ln2t_tools freesurfer --dataset mydataset --participant-label 05 08 12 15 19
-```
-
-### Monitoring and Utilities
-
-```bash
-# List available datasets
-ln2t_tools --list-datasets
-
-# List missing subjects for any tool
-ln2t_tools freesurfer --dataset mydataset --list-missing
-ln2t_tools fmriprep --dataset mydataset --list-missing
-ln2t_tools qsiprep --dataset mydataset --list-missing
-ln2t_tools meld_graph --dataset mydataset --list-missing
-
-# Check running instances
-ln2t_tools --list-instances
-
-# Limit parallel executions
-ln2t_tools --max-instances 3 --dataset mydataset
-```
-
-### Processing on HPC Cluster
-
-```bash
-# Submit FreeSurfer to SLURM cluster
-ln2t_tools freesurfer --dataset mydataset \
-  --slurm --slurm-user your_username \
-  --slurm-apptainer-dir /path/to/apptainer
-
-# Submit multiple participants to HPC
-ln2t_tools fmriprep --dataset mydataset --participant-label 01 02 03 \
-  --slurm --slurm-user your_username \
-  --slurm-apptainer-dir /path/to/apptainer \
-  --slurm-gpus 1 --slurm-mem 32G
-
-# List missing and submit to HPC (using output from --list-missing)
-ln2t_tools qsiprep --dataset mydataset --participant-label 05 08 12 \
-  --tool-args "--output-resolution 1.25" \
-  --slurm --slurm-user your_username --slurm-apptainer-dir /path/to/apptainer
-```
-
----
-
-## Troubleshooting
-
-### Images Not Found
-If Apptainer images are missing, they will be built automatically:
-```bash
-ln2t_tools will attempt to build: freesurfer/freesurfer:7.3.2
-```
-
-### FreeSurfer License
-Ensure your FreeSurfer license is at `~/licenses/license.txt` (default location) or specify:
-```bash
-ln2t_tools freesurfer --dataset mydataset --participant-label 01 --fs-license /path/to/license.txt
-```
-
-### Instance Limit Reached
-```bash
-Cannot start new instance. Maximum instances (10) reached.
-Currently running: 10 instances.
-Please wait for other instances to complete or increase --max-instances.
-```
-
-Solution: Wait for jobs to finish or increase limit:
-```bash
-ln2t_tools --max-instances 15 --dataset mydataset
-```
-
-### Missing Prerequisites
-For QSIRecon or MELD Graph, ensure prerequisite tools have been run first:
-```bash
-# QSIRecon needs QSIPrep
-ln2t_tools qsiprep --dataset mydataset --participant-label 01 \
-  --tool-args "--output-resolution 1.25"
-ln2t_tools qsirecon --dataset mydataset --participant-label 01
-
-# MELD Graph needs FreeSurfer
-ln2t_tools freesurfer --dataset mydataset --participant-label 01
-ln2t_tools meld_graph --dataset mydataset --participant-label 01
-```
-
----
-
 ## Adding a New Tool
 
 ln2t_tools uses a modular plugin architecture that allows you to add new neuroimaging tools without modifying the core codebase. Each tool is self-contained in its own directory with CLI arguments, validation, and processing logic.
@@ -1866,21 +938,21 @@ logger = logging.getLogger(__name__)
 
 class MyTool(BaseTool):
     """My custom neuroimaging tool.
-    
+
     Brief description of what the tool does and when to use it.
     """
-    
+
     # Required class attributes
     name = "mytool"                                    # CLI subcommand name
     help_text = "Brief help shown in ln2t_tools -h"   # Short description
     description = "Detailed tool description"          # Long description
     default_version = DEFAULT_MYTOOL_VERSION           # Default container version
     requires_gpu = False                               # Set True if GPU-accelerated
-    
+
     @classmethod
     def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
         """Add tool-specific CLI arguments.
-        
+
         Common arguments (--dataset, --participant-label, --version, etc.)
         are added automatically. Only add tool-specific options here.
         """
@@ -1894,11 +966,11 @@ class MyTool(BaseTool):
             action="store_true",
             help="Enable special feature"
         )
-    
+
     @classmethod
     def validate_args(cls, args: argparse.Namespace) -> bool:
         """Validate tool-specific arguments.
-        
+
         Returns True if arguments are valid, False otherwise.
         Log error messages to explain validation failures.
         """
@@ -1907,7 +979,7 @@ class MyTool(BaseTool):
             logger.error("--my-option cannot be 'invalid'")
             return False
         return True
-    
+
     @classmethod
     def check_requirements(
         cls,
@@ -1916,7 +988,7 @@ class MyTool(BaseTool):
         args: argparse.Namespace
     ) -> bool:
         """Check if all requirements are met to process this participant.
-        
+
         Verify that required input files exist and any prerequisites
         (like FreeSurfer outputs) are available.
         """
@@ -1926,13 +998,13 @@ class MyTool(BaseTool):
             suffix='T1w',
             extension=['.nii', '.nii.gz']
         )
-        
+
         if not t1w_files:
             logger.warning(f"No T1w images found for {participant_label}")
             return False
-        
+
         return True
-    
+
     @classmethod
     def get_output_dir(
         cls,
@@ -1943,16 +1015,16 @@ class MyTool(BaseTool):
         run: Optional[str] = None
     ) -> Path:
         """Get the output directory path for this participant.
-        
+
         Follow BIDS derivatives naming: {tool}_{version}/sub-{id}/
         """
         version = args.version or cls.default_version
         subdir = f"sub-{participant_label}"
         if session:
             subdir = f"{subdir}_ses-{session}"
-        
+
         return dataset_derivatives / f"{cls.name}_{version}" / subdir
-    
+
     @classmethod
     def build_command(
         cls,
@@ -1965,7 +1037,7 @@ class MyTool(BaseTool):
         **kwargs
     ) -> List[str]:
         """Build the Apptainer command to run the tool.
-        
+
         Returns a list of command components that will be joined
         and executed via Apptainer.
         """
@@ -1973,7 +1045,7 @@ class MyTool(BaseTool):
         output_dir = cls.get_output_dir(
             dataset_derivatives, participant_label, args
         )
-        
+
         # Build Apptainer command
         cmd = [
             "apptainer", "run", "--cleanenv",
@@ -1987,14 +1059,14 @@ class MyTool(BaseTool):
             "/output",
             "--participant-label", participant_label,
         ]
-        
+
         # Add tool-specific options
         if getattr(args, 'my_flag', False):
             cmd.append("--my-flag")
-        
+
         my_option = getattr(args, 'my_option', 'default_value')
         cmd.extend(["--my-option", my_option])
-        
+
         return cmd
 ```
 
@@ -2033,9 +1105,9 @@ This function maps tool names to Docker image owners and handles container build
 
 def ensure_image_exists(tool, version, images_dir, logger):
     """Ensure Apptainer image exists, build from Docker Hub if needed."""
-    
+
     # ... existing code ...
-    
+
     # Add your tool to the tool owner mapping
     if tool == "freesurfer":
         tool_owner = "freesurfer"
@@ -2045,7 +1117,7 @@ def ensure_image_exists(tool, version, images_dir, logger):
         tool_owner = "myorg"         # Docker Hub organization/user
     else:
         raise ValueError(f"Unknown tool: {tool}")
-    
+
     # The version is used directly as the Docker tag
     # Make sure DEFAULT_MYTOOL_VERSION in defaults.py matches the exact Docker tag
 ```
@@ -2059,7 +1131,7 @@ This function builds the actual Apptainer execution command with all bindings:
 
 def build_apptainer_cmd(tool, participant_label, args, ...):
     # ... existing code ...
-    
+
     elif tool == "mytool":
         cmd = [
             "apptainer", "run", "--cleanenv",
@@ -2105,7 +1177,7 @@ _ln2t_tools_mytool() {
             return 0
             ;;
     esac
-    
+
     COMPREPLY=( $(compgen -W "--my-option --my-flag --help" -- "${cur}") )
 }
 ```
