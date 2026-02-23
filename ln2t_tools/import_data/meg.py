@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 try:
     import mne
     from mne_bids import write_raw_bids, BIDSPath
+    import mne_bids.write  # For patching FIFF split size
     mne.set_log_level('ERROR')
     logging.getLogger('mne_bids').setLevel(logging.ERROR)
     logging.getLogger('mne').setLevel(logging.ERROR)
@@ -802,6 +803,60 @@ def normalize_raw_info(raw: 'mne.io.BaseRaw') -> None:
         si['birthday'] = None
 
 
+def parse_task_spec(task_spec: str) -> Dict[str, Optional[str]]:
+    """Parse a config task specification into BIDS entities.
+
+    Supports simple task labels (e.g., ``"rest"``) and composite labels with
+    extra entities separated by underscores (e.g., ``"noise_acq-supine"``).
+
+    Parameters
+    ----------
+    task_spec : str
+        Task specification from meg2bids.json pattern rule.
+
+    Returns
+    -------
+    Dict[str, Optional[str]]
+        Dictionary with BIDS entities extracted from the task specification.
+        Always contains a ``task`` key.
+    """
+    entities: Dict[str, Optional[str]] = {
+        'task': None,
+        'acq': None,
+        'ce': None,
+        'dir': None,
+        'rec': None,
+    }
+
+    if not task_spec:
+        entities['task'] = 'unknown'
+        return entities
+
+    tokens = [token for token in str(task_spec).split('_') if token]
+    if not tokens:
+        entities['task'] = 'unknown'
+        return entities
+
+    # First token is always task label
+    entities['task'] = tokens[0]
+
+    # Optional extra entities (e.g., acq-supine)
+    for token in tokens[1:]:
+        if '-' not in token:
+            # Keep backward-compatible behavior for non-entity suffixes
+            entities['task'] = f"{entities['task']}-{token}"
+            continue
+
+        entity_name, entity_value = token.split('-', 1)
+        if entity_name in entities and entity_value:
+            entities[entity_name] = entity_value
+        else:
+            # Unknown token: append to task to avoid dropping user input
+            entities['task'] = f"{entities['task']}-{token}"
+
+    return entities
+
+
 
 
 
@@ -870,6 +925,64 @@ def add_associated_empty_room_to_session(
     
     if updated_count > 0:
         logger.info(f"  ✓ Added AssociatedEmptyRoom to {updated_count} file(s)")
+
+
+def consolidate_coordsystem_metadata(
+    meg_dir: Path,
+    subject: str,
+    session: Optional[str] = None
+) -> None:
+    """Keep only one coordsystem JSON file per subject/session.
+
+    Removes redundant acquisition-specific files such as
+    ``sub-<id>[_ses-<id>]_acq-<label>_coordsystem.json`` and retains a single
+    ``sub-<id>[_ses-<id>]_coordsystem.json`` file.
+
+    Parameters
+    ----------
+    meg_dir : Path
+        Path to the MEG directory containing converted files
+    subject : str
+        Subject ID (without 'sub-' prefix)
+    session : Optional[str]
+        Session ID (without 'ses-' prefix)
+    """
+    if not meg_dir.exists():
+        return
+
+    coordsystem_files = sorted(meg_dir.glob("*_coordsystem.json"))
+    if len(coordsystem_files) <= 1:
+        return
+
+    if session:
+        canonical_name = f"sub-{subject}_ses-{session}_coordsystem.json"
+    else:
+        canonical_name = f"sub-{subject}_coordsystem.json"
+    canonical_path = meg_dir / canonical_name
+
+    acq_files = [f for f in coordsystem_files if "_acq-" in f.name]
+    if not acq_files:
+        return
+
+    # Ensure canonical coordsystem file exists
+    if not canonical_path.exists():
+        try:
+            shutil.copy2(acq_files[0], canonical_path)
+            logger.info(f"  ✓ Created canonical coordsystem file: {canonical_name}")
+        except Exception as err:
+            logger.warning(f"Failed to create canonical coordsystem file {canonical_name}: {err}")
+            return
+
+    removed = 0
+    for acq_file in acq_files:
+        try:
+            acq_file.unlink()
+            removed += 1
+        except Exception as err:
+            logger.warning(f"Failed to delete redundant coordsystem file {acq_file.name}: {err}")
+
+    if removed > 0:
+        logger.info(f"  ✓ Removed {removed} redundant acq-specific coordsystem file(s)")
 
 
 def extract_and_write_headshape(
@@ -959,7 +1072,8 @@ def convert_raw_file(
     run: Optional[int],
     config: Dict[str, Any],
     bids_root: Path,
-    split_parts: Optional[List[Path]] = None
+    split_parts: Optional[List[Path]] = None,
+    task_entities: Optional[Dict[str, Optional[str]]] = None
 ) -> bool:
     """Convert a single raw FIF file to BIDS.
     
@@ -981,6 +1095,8 @@ def convert_raw_file(
         BIDS root directory
     split_parts : Optional[List[Path]]
         List of split file parts if applicable
+    task_entities : Optional[Dict[str, Optional[str]]]
+        Parsed BIDS entities from task specification (task/acq/rec/dir/ce)
     
     Returns
     -------
@@ -999,15 +1115,25 @@ def convert_raw_file(
         # MNE automatically handles split files
         raw = mne.io.read_raw_fif(fif_path, preload=False, allow_maxshield=allow_maxshield, verbose=False)
         normalize_raw_info(raw)
+
+        if task_entities is None:
+            task_entities = parse_task_spec(task)
+
+        task_label = task_entities.get('task') or task
         
         bids_path = BIDSPath(
             subject=subject,
             session=session,
-            task=task,
+            task=task_label,
+            acquisition=task_entities.get('acq'),
             run=run,
             datatype=datatype,
             root=bids_root
         )
+        
+        # Patch mne-bids split size to 1900MB for maxfilter compatibility
+        # (maxfilter has strict 2GB limit, default MNE uses ~2.1GB)
+        mne_bids.write._FIFF_SPLIT_SIZE = "1900MB"
         
         write_raw_bids(raw, bids_path, overwrite=overwrite, verbose=False)
         logger.debug(f"    -> Saved BIDS file: {bids_path.basename}")
@@ -1622,29 +1748,31 @@ def import_meg(
                 pattern_rule = match_file_pattern(fif_file.name, file_patterns)
                 if pattern_rule:
                     task = pattern_rule.get('task', 'unknown')
+                    task_entities = parse_task_spec(task)
                     run_extraction = pattern_rule.get('run_extraction', 'last_digits')
                     run = extract_run_from_filename(fif_file.name, run_extraction)
-                    file_mapping[fif_file] = (task, run, pattern_rule)
+                    file_mapping[fif_file] = (task, task_entities, run, pattern_rule)
                     logger.debug(f"  {fif_file.name} -> task={task}, run={run}")
                 else:
                     logger.warning(f"  ⊘ No matching pattern for: {fif_file.name}")
             
             # Group by task and assign run numbers if needed
             task_files = defaultdict(list)
-            for fif_path, (task, run, pattern_rule) in file_mapping.items():
-                task_files[task].append((fif_path, run))
+            for fif_path, (task, task_entities, run, pattern_rule) in file_mapping.items():
+                task_key = task
+                task_files[task_key].append((fif_path, task, task_entities, run))
             
             # Reassign run numbers if multiple files per task
             final_mapping = {}
-            for task, files in task_files.items():
+            for task_key, files in task_files.items():
                 if len(files) == 1:
-                    fif_path, _ = files[0]
-                    final_mapping[fif_path] = (task, None)
+                    fif_path, task, task_entities, _ = files[0]
+                    final_mapping[fif_path] = (task, task_entities, None)
                 else:
                     # Sort by run number from filename, then by filename
-                    sorted_files = sorted(files, key=lambda x: (x[1] if x[1] is not None else float('inf'), x[0].name))
-                    for idx, (fif_path, _) in enumerate(sorted_files, start=1):
-                        final_mapping[fif_path] = (task, idx)
+                    sorted_files = sorted(files, key=lambda x: (x[3] if x[3] is not None else float('inf'), x[0].name))
+                    for idx, (fif_path, task, task_entities, _) in enumerate(sorted_files, start=1):
+                        final_mapping[fif_path] = (task, task_entities, idx)
             
             # Convert files
             logger.info("Converting files...")
@@ -1653,12 +1781,12 @@ def import_meg(
                     stats.add_file('unknown', 'skipped', fif_path.name)
                     continue
                 
-                task, run = final_mapping[fif_path]
+                task, task_entities, run = final_mapping[fif_path]
                 split_parts_for_file = split_file_groups.get(fif_path, None)
                 
                 success = convert_raw_file(
                     fif_path, participant_id, session_id, task, run,
-                    config, rawdata_dir, split_parts_for_file
+                    config, rawdata_dir, split_parts_for_file, task_entities
                 )
                 
                 if success:
@@ -1687,7 +1815,7 @@ def import_meg(
                     
                     # Build mapping of task -> raw file organization (splits or runs)
                     task_organization = {}  # task -> {'type': 'splits'/'runs', 'base_names': set()}
-                    for raw_path, (task, run) in final_mapping.items():
+                    for raw_path, (task, task_entities, run) in final_mapping.items():
                         if task not in task_organization:
                             task_organization[task] = {'base_names': set(), 'has_splits': False, 'has_runs': False}
                         
@@ -1767,6 +1895,9 @@ def import_meg(
             else:
                 meg_dir = rawdata_dir / f"sub-{participant_id}" / "meg"
             add_associated_empty_room_to_session(meg_dir, participant_id, session_id)
+
+            # Keep one coordsystem file per session/subject (drop acq-specific duplicates)
+            consolidate_coordsystem_metadata(meg_dir, participant_id, session_id)
         
         # Summary for this participant
         logger.info(f"{'-'*60}")

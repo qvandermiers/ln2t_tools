@@ -23,6 +23,12 @@
       "description": "Memory task"
     },
     {
+      "pattern": "*noise*supine*.fif",
+      "task": "noise_acq-supine",
+      "run_extraction": "none",
+      "description": "Empty-room noise acquisition (supine)"
+    },
+    {
       "pattern": "*task*.fif",
       "task": "task",
       "run_extraction": "last_digits",

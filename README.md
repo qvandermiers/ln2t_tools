@@ -1474,6 +1474,12 @@ Create `meg2bids.json` in your configs directory with pattern matching rules:
       "task": "visual",
       "run_extraction": "last_digits",
       "description": "Visual task"
+    },
+    {
+      "pattern": "*noise*supine*.fif",
+      "task": "noise_acq-supine",
+      "run_extraction": "none",
+      "description": "Empty-room noise acquisition in supine position"
     }
   ],
   "calibration": {
@@ -1494,7 +1500,7 @@ Create `meg2bids.json` in your configs directory with pattern matching rules:
 
 **file_patterns**: List of rules to match FIF filenames to BIDS task names
 - `pattern`: Glob pattern (e.g., `*rest*.fif`)
-- `task`: BIDS task name
+- `task`: BIDS task label, optionally followed by extra entities using `_` separators (e.g., `noise_acq-supine`)
 - `run_extraction`: How to extract run numbers (`"last_digits"` or `"none"`)
 
 **calibration**: Calibration file settings
