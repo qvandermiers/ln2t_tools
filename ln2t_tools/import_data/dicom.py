@@ -395,6 +395,8 @@ def import_dicom(
             cmd += f" -s {session}"
         cmd += f" -d {source_path} -c {config_file}"
         
+        logger.debug(f"dcm2bids command: {cmd}")
+        
         try:
             result = subprocess.run(
                 cmd,
@@ -404,6 +406,33 @@ def import_dicom(
                 text=True,
                 executable='/bin/bash'
             )
+            
+            # Log dcm2bids output for debugging
+            if result.stdout:
+                logger.debug(f"dcm2bids stdout:\n{result.stdout}")
+            if result.stderr:
+                logger.debug(f"dcm2bids stderr:\n{result.stderr}")
+            
+            # Verify that subject directory was actually created
+            expected_subj_dir = rawdata_dir / f"sub-{participant_id}"
+            if not expected_subj_dir.exists():
+                logger.error(
+                    f"✗ dcm2bids completed but subject directory was NOT created: {expected_subj_dir}\n"
+                    f"This indicates dcm2bids encountered an issue even though it reported success.\n"
+                    f"Possible causes:\n"
+                    f"  - dcm2bids config error\n"
+                    f"  - DICOM files missing or corrupted\n"
+                    f"  - dcm2bids output directory permissions issue\n"
+                    f"Please review dcm2bids logs for details."
+                )
+                failed_participants.append(participant_id)
+                
+                # If we extracted from archive, still clean up
+                if was_extracted and source_path.exists():
+                    logger.info(f"Cleaning up extracted directory after failed conversion: {source_path.name}")
+                    shutil.rmtree(source_path)
+                continue
+            
             logger.info(f"✓ Successfully imported {participant_id}")
             if result.stdout:
                 logger.debug(result.stdout)

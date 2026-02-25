@@ -570,6 +570,7 @@ def handle_import(args):
     # Show tree of imported data (only if participants were specified)
     if args.participant_label:
         logger.info("Validating imported data structure...")
+        validation_failed = False
         for participant in args.participant_label:
             participant_id = participant.replace('sub-', '')
             subj_dir = rawdata_dir / f"sub-{participant_id}"
@@ -596,7 +597,15 @@ def handle_import(args):
                     for item in sorted(subj_dir.iterdir()):
                         logger.info(f"  {item.name}")
             else:
-                logger.warning(f"Subject directory not created: {subj_dir}")
+                logger.error(f"Subject directory not created: {subj_dir}")
+                validation_failed = True
+        
+        if validation_failed:
+            logger.error("\n" + "="*70)
+            logger.error("VALIDATION FAILED: Expected subject directories were not created.")
+            logger.error("This usually indicates an issue with the conversion tool (e.g., dcm2bids).")
+            logger.error("Check the detailed logs above for error messages from the conversion tool.")
+            logger.error("="*70)
 
 
 def setup_directories(args) -> tuple[Path, Path, Path]:
