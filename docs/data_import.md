@@ -9,6 +9,43 @@ ln2t_tools includes import utilities to convert source data to BIDS format:
 
 Each dataype import will use a dedicated configuration file, located by default in the source data folder.
 
+## Global Import Options
+
+The following options apply to all import datatypes (DICOM, MRS, Physio, MEG):
+
+### `--only-uncompressed`
+
+Controls how the tool handles compressed source data archives:
+
+```bash
+# Default behavior: accepts both uncompressed folders and .tar.gz archives
+ln2t_tools import --dataset mydataset --datatype dicom
+
+# Only uncompressed: ignores any .tar.gz archives, only processes folders
+ln2t_tools import --dataset mydataset --datatype dicom --only-uncompressed
+```
+
+**When to use `--only-uncompressed`**:
+- You have both uncompressed folders AND compressed archives for the same data
+- You want to avoid processing the compressed version (to prevent duplication)
+- You're intentionally working with only the extracted, uncompressed source data
+- You want to ensure the tool doesn't extract large archives unnecessarily
+
+**Data source detection logic**:
+
+| Scenario | Default Behavior | With `--only-uncompressed` |
+|----------|-----------------|-------------------------|
+| Only `CB001/` folder exists | ✓ Process | ✓ Process |
+| Only `CB001.tar.gz` archive exists | ✓ Extract & process | ✗ Skip (not found error) |
+| Both `CB001/` and `CB001.tar.gz` exist | ✓ Use existing folder | ✓ Use existing folder |
+| Neither exists | ✗ Not found error | ✗ Not found error |
+
+This option applies to:
+- DICOM participant discovery and data loading
+- MRS participant discovery and data loading
+- Physio and pre-import DICOM metadata extraction
+- MEG source file discovery
+
 ## DICOM Import
 
 Convert DICOM files to BIDS-compliant NIfTI format with optional defacing:
@@ -85,6 +122,73 @@ Convert Magnetic Resonance Spectroscopy data to BIDS format:
 ln2t_tools import --dataset mydataset --participant-label 01 --datatype mrs
 ```
 
+## DICOM Import
+
+Convert DICOM files to BIDS-compliant NIfTI format with optional defacing:
+
+```bash
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype dicom
+```
+
+### Automatic Participant Discovery
+
+If you don't specify `--participant-label`, the tool will automatically discover all available participants from your DICOM source directory by scanning for folders matching your dataset initials pattern:
+
+```bash
+# Discovers all participants matching {dataset_initials}* (e.g., CB001, CB042, HP007)
+ln2t_tools import --dataset mydataset --datatype dicom
+```
+
+For more information on handling compressed vs. uncompressed data, see the `--only-uncompressed` option in [Global Import Options](#global-import-options).
+
+### Additional DICOM Import Options
+
+```bash
+# Deface anatomical images during import
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype dicom --deface
+
+# Keep temporary dcm2bids files (normally deleted)
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype dicom --keep-tmp-files
+
+# Specify custom virtual environment for dcm2bids
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype dicom \
+  --import-env /path/to/venv
+
+# Multi-session import
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype dicom --session 01
+```
+
+## MRS Import
+
+Convert Magnetic Resonance Spectroscopy data to BIDS format:
+
+```bash
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype mrs
+
+# Or auto-discover all participants
+ln2t_tools import --dataset mydataset --datatype mrs
+
+# With --only-uncompressed option
+ln2t_tools import --dataset mydataset --datatype mrs --only-uncompressed
+```
+
+For more information on handling compressed vs. uncompressed data, see the `--only-uncompressed` option in [Global Import Options](#global-import-options).
+
+### MRS Pre-import
+
+Gather P-files from scanner backup locations before running the main import:
+
+```bash
+ln2t_tools import --dataset mydataset --pre-import --datatype mrs
+
+# With --only-uncompressed
+ln2t_tools import --dataset mydataset --pre-import --datatype mrs --only-uncompressed
+```
+
+
+
+
+
 ## Physio Import
 
 Convert GE physiological monitoring data (respiratory, PPG) to BIDS format with automatic fMRI matching.
@@ -95,7 +199,28 @@ Convert GE physiological monitoring data (respiratory, PPG) to BIDS format with 
 # Import physio data using in-house processing (default)
 # Config file will be auto-detected from sourcedata/configs/physio.json
 ln2t_tools import --dataset mydataset --participant-label 01 --datatype physio
+
+# Or with phys2bids
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype physio --phys2bids
+
+# With --only-uncompressed to skip compressed DICOM archives
+ln2t_tools import --dataset mydataset --participant-label 01 --datatype physio --only-uncompressed
 ```
+
+For more information on handling compressed vs. uncompressed data, see the `--only-uncompressed` option in [Global Import Options](#global-import-options).
+
+### Physio Pre-import
+
+Gather physio files from scanner backup location before running the main import:
+
+```bash
+ln2t_tools import --dataset mydataset --pre-import --datatype physio
+
+# With --only-uncompressed
+ln2t_tools import --dataset mydataset --pre-import --datatype physio --only-uncompressed
+```
+
+The pre-import step uses DICOM metadata to match physio files by timestamp, so the `--only-uncompressed` option affects DICOM archive handling during this step.
 
 ### Configuration File
 
