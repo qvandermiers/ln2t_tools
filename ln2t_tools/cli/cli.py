@@ -326,9 +326,9 @@ def parse_args() -> argparse.Namespace:
     
     description = textwrap.dedent(f"""
     {Colors.BOLD}{Colors.GREEN}╔══════════════════════════════════════════════════════════════════════════════╗
-    ║                     LN2T TOOLS v0.1.0                                   ║
-    ║               Neuroimaging Pipeline Runner                               ║
-    ║          Brain imaging data processing and analysis platform             ║
+    ║                     LN2T TOOLS v0.1.0                                        ║
+    ║               Neuroimaging Pipeline Runner                                   ║
+    ║          Brain imaging data processing and analysis platform                 ║
     ╚══════════════════════════════════════════════════════════════════════════════╝{Colors.END}
 
     {Colors.BOLD}Description:{Colors.END}
