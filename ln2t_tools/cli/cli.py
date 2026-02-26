@@ -580,12 +580,19 @@ def parse_args() -> argparse.Namespace:
         help="Only check for uncompressed source data folders (e.g., AB001) and disregard compressed archives (e.g., AB001.tar.gz). "
              "Useful for avoiding data duplication issues when both uncompressed and compressed versions exist."
     )
-    # Pre-import options (for MRS and physio data)
+    # Pre-import and full-import options (for MRS and physio data)
     parser_import.add_argument(
         "--pre-import",
         action="store_true",
         help="Run pre-import step: gather source files from scanner backup locations. "
              "Use with --datatype mrs or --datatype physio to specify which data to pre-import."
+    )
+    parser_import.add_argument(
+        "--full",
+        action="store_true",
+        help="Run pre-import followed by import in sequence. For DICOM and MEG data, runs standard import. "
+             "For MRS and PHYSIO data, runs pre-import first, then chains to standard import. "
+             "Participants are auto-discovered from DICOM or specified via --participant-label."
     )
     parser_import.add_argument(
         "--mrraw-dir",

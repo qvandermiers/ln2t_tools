@@ -337,6 +337,45 @@ def handle_import(args):
     if venv_path:
         venv_path = Path(venv_path).resolve()
     
+    # Check for conflicting options
+    if getattr(args, 'full', False) and getattr(args, 'pre_import', False):
+        logger.error("Cannot use both --full and --pre-import together")
+        logger.info("--full runs pre-import automatically, --pre-import runs only pre-import step")
+        return
+    
+    # Handle --full for chaining pre-import and import for MRS/physio
+    if getattr(args, 'full', False):
+        # Auto-infer ds_initials from dataset name
+        ds_initials = get_dataset_initials(dataset)
+        if not ds_initials:
+            logger.error(f"Could not infer dataset initials from '{dataset}'")
+            logger.error("Dataset name should follow pattern: YYYY-Name_Parts-hexhash")
+            return
+        
+        # Auto-discover participants from DICOM directory if not specified
+        participant_labels = args.participant_label
+        if not participant_labels:
+            dicom_dir = sourcedata_dir / "dicom"
+            if dicom_dir.exists():
+                logger.info("Auto-discovering participants from DICOM directory...")
+                participant_labels = discover_participants_from_dicom_dir(
+                    dicom_dir, ds_initials, 
+                    only_uncompressed=getattr(args, 'only_uncompressed', False)
+                )
+                
+                if not participant_labels:
+                    logger.error(f"No participants found in {dicom_dir} matching pattern {ds_initials}*")
+                    return
+                
+                logger.info(f"Discovered {len(participant_labels)} participants: {participant_labels}")
+            else:
+                logger.error(f"DICOM directory not found: {dicom_dir}")
+                logger.error("Cannot auto-discover participants without DICOM data")
+                return
+        
+        # Override the participant_labels in args for use in import functions
+        args.participant_label = participant_labels
+    
     # Handle --pre-import for MRS or physio data
     if getattr(args, 'pre_import', False):
         datatype_arg = getattr(args, 'datatype', None)
@@ -494,6 +533,32 @@ def handle_import(args):
                 logger.info(f"No mrs/pfiles directory found in {sourcedata_dir}, skipping")
                 continue
             
+            # If --full is enabled, run pre-import first
+            if getattr(args, 'full', False):
+                logger.info(f"\n{'='*60}")
+                logger.info("MRS PRE-IMPORT: Gathering P-files from scanner backup")
+                logger.info(f"{'='*60}")
+                logger.info(f"Using dataset initials: {get_dataset_initials(dataset)}")
+                
+                pre_import_success = pre_import_mrs(
+                    dataset=dataset,
+                    participant_labels=args.participant_label,
+                    sourcedata_dir=sourcedata_dir,
+                    ds_initials=get_dataset_initials(dataset),
+                    session=getattr(args, 'session', None),
+                    mrraw_dir=getattr(args, 'mrraw_dir', None),
+                    tmp_dir=getattr(args, 'mrs_tmp_dir', None),
+                    tolerance_hours=getattr(args, 'pre_import_tolerance_hours', None) or 1.0,
+                    dry_run=getattr(args, 'dry_run', False),
+                    only_uncompressed=getattr(args, 'only_uncompressed', False)
+                )
+                
+                if not pre_import_success:
+                    logger.error("✗ MRS pre-import failed, skipping MRS import")
+                    continue
+                
+                logger.info("✓ MRS pre-import completed successfully")
+            
             # Compress source by default, unless --skip-source-compression is set
             compress_source = not getattr(args, 'skip_source_compression', False)
             
@@ -515,6 +580,32 @@ def handle_import(args):
             if not (sourcedata_dir / "physio").exists():
                 logger.info(f"No physio directory found in {sourcedata_dir}, skipping")
                 continue
+            
+            # If --full is enabled, run pre-import first
+            if getattr(args, 'full', False):
+                logger.info(f"\n{'='*60}")
+                logger.info("PHYSIO PRE-IMPORT: Gathering physio files from scanner backup")
+                logger.info(f"{'='*60}")
+                logger.info(f"Using dataset initials: {get_dataset_initials(dataset)}")
+                
+                pre_import_success = pre_import_physio(
+                    dataset=dataset,
+                    participant_labels=args.participant_label,
+                    sourcedata_dir=sourcedata_dir,
+                    ds_initials=get_dataset_initials(dataset),
+                    session=getattr(args, 'session', None),
+                    backup_dir=getattr(args, 'physio_backup_dir', None),
+                    tolerance_hours=getattr(args, 'pre_import_tolerance_hours', None) or 1.0,
+                    dry_run=getattr(args, 'dry_run', False),
+                    physio_config=getattr(args, 'physio_config', None),
+                    only_uncompressed=getattr(args, 'only_uncompressed', False)
+                )
+                
+                if not pre_import_success:
+                    logger.error("✗ Physio pre-import failed, skipping physio import")
+                    continue
+                
+                logger.info("✓ Physio pre-import completed successfully")
             
             # Compress source by default, unless --skip-source-compression is set
             compress_source = not getattr(args, 'skip_source_compression', False)
