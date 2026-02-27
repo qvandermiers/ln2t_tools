@@ -1217,6 +1217,7 @@ apptainer exec \\
     -B "$HPC_RAWDATA/$DATASET-rawdata:/data:ro" \\
     -B "$OUTPUT_DIR:/output" \\
     -B "$FS_LICENSE:/usr/local/freesurfer/.license:ro" \\
+    -B "$FS_LICENSE:/opt/freesurfer/.license:ro" \\
     -B "$TMPDIR:/tmp" \\
     --env SUBJECTS_DIR=/output \\
     --env TMPDIR=/tmp \\

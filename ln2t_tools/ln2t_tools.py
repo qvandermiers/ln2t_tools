@@ -894,7 +894,7 @@ def process_single_t1w(
     logger.info(f"Binding directories:")
     logger.info(f"  Rawdata: {dataset_rawdata} -> /rawdata (read-only)")
     logger.info(f"  Derivatives: {dataset_derivatives} -> /derivatives")
-    logger.info(f"  FreeSurfer license: {args.fs_license} -> /usr/local/freesurfer/.license")
+    logger.info(f"  FreeSurfer license: {args.fs_license} -> /usr/local/freesurfer/.license, /opt/freesurfer/.license")
 
     # Build and launch FreeSurfer command
     apptainer_cmd = build_apptainer_cmd(
