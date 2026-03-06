@@ -536,6 +536,7 @@ def build_apptainer_cmd(tool: str, **options) -> str:
             f"-B {options['rawdata']}:/rawdata:ro -B {options['derivatives']}:/derivatives "
             f"-B {options['derivatives']}:/tmp:rw "
             f"--env TMPDIR=/tmp "
+            f"--env FS_LICENSE=/opt/freesurfer/.license "
             f"{options['apptainer_img']} recon-all -all -subjid {subject_id} "
             f"-i {t1w_container} "
             f"-sd /derivatives/{options['output_label']}"
