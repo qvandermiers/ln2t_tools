@@ -20,9 +20,9 @@ logger = logging.getLogger(__name__)
 
 # Suppress verbose mne and mne_bids output
 try:
-    import mne
-    from mne_bids import write_raw_bids, BIDSPath
-    import mne_bids.write  # For patching FIFF split size
+    import mne  # type: ignore
+    from mne_bids import write_raw_bids, BIDSPath  # type: ignore
+    import mne_bids.write  # type: ignore  # For patching FIFF split size
     mne.set_log_level('ERROR')
     logging.getLogger('mne_bids').setLevel(logging.ERROR)
     logging.getLogger('mne').setLevel(logging.ERROR)
@@ -44,18 +44,31 @@ class ConversionStats:
         self.total_files = 0
         self.converted = 0
         self.skipped = 0
+        self.excluded = 0
         self.failed = 0
         self.task_counts = defaultdict(int)
         self.failed_files = []
     
     def add_file(self, task: str, status: str, filename: str = ""):
-        """Record a file conversion."""
+        """Record a file conversion.
+        
+        Parameters
+        ----------
+        task : str
+            Task name associated with the file
+        status : str
+            File status: 'converted', 'skipped', 'excluded', or 'failed'
+        filename : str
+            Optional filename for logging/tracking
+        """
         self.total_files += 1
         if status == 'converted':
             self.converted += 1
             self.task_counts[task] += 1
         elif status == 'skipped':
             self.skipped += 1
+        elif status == 'excluded':
+            self.excluded += 1
         elif status == 'failed':
             self.failed += 1
             if filename:
@@ -77,7 +90,7 @@ def load_meg_config(config_path: Optional[Path], sourcedata_dir: Path) -> Dict[s
     Returns
     -------
     Dict[str, Any]
-        Configuration dictionary
+        Configuration dictionary with optional 'exclude_patterns' field
     """
     if config_path is None:
         # Auto-detect from sourcedata/configs/
@@ -93,7 +106,16 @@ def load_meg_config(config_path: Optional[Path], sourcedata_dir: Path) -> Dict[s
     if 'file_patterns' not in config:
         raise ValueError("Configuration must contain 'file_patterns' section")
     
-    logger.info(f"Loaded MEG configuration from {config_path}")
+    # Ensure optional exclude_patterns is a list (defaults to empty if missing)
+    if 'exclude_patterns' not in config:
+        config['exclude_patterns'] = []
+    elif not isinstance(config['exclude_patterns'], list):
+        raise ValueError("'exclude_patterns' must be a list of wildcard patterns")
+    
+    if config['exclude_patterns']:
+        logger.info(f"Loaded MEG configuration from {config_path} (exclude_patterns: {len(config['exclude_patterns'])} pattern(s))")
+    else:
+        logger.info(f"Loaded MEG configuration from {config_path}")
     return config
 
 
@@ -206,6 +228,34 @@ def extract_derivative_info(filename: str) -> Optional[Tuple[str, str]]:
         proc_label = '-'.join(unique_labels)
         base_filename = current_stem + '.fif'
         return (base_filename, proc_label)
+    
+    return None
+
+
+def should_exclude_file(filename: str, exclude_patterns: List[str]) -> Optional[str]:
+    """Check if a file should be excluded based on configured patterns.
+    
+    Performs case-insensitive wildcard matching against exclude patterns.
+    
+    Parameters
+    ----------
+    filename : str
+        FIF filename to check
+    exclude_patterns : List[str]
+        List of wildcard patterns (e.g., '*test*', '*demo*')
+    
+    Returns
+    -------
+    Optional[str]
+        Matched pattern if file should be excluded, None otherwise
+    """
+    if not exclude_patterns:
+        return None
+    
+    filename_lower = filename.lower()
+    for pattern in exclude_patterns:
+        if fnmatch.fnmatch(filename_lower, pattern.lower()):
+            return pattern
     
     return None
 
@@ -585,7 +635,7 @@ def find_fine_calibration_file(
             selected_file = f
             selected_date = cal_date
     
-    if selected_file:
+    if selected_file and selected_date:
         logger.info(f"  ✓ Fine-calibration: {selected_file.name} (cal date: {selected_date.strftime('%Y-%m-%d')}, session: {session_dt.strftime('%Y-%m-%d')})")
         return selected_file
     else:
@@ -617,7 +667,7 @@ def detect_calibration_files(
     Dict[str, Optional[Path]]
         Dictionary with 'crosstalk' and 'calibration' file paths
     """
-    calibration_files = {'crosstalk': None, 'calibration': None}
+    calibration_files: Dict[str, Optional[Path]] = {'crosstalk': None, 'calibration': None}
     
     if meg_maxfilter_root and meg_maxfilter_root.exists():
         ctc_dir = meg_maxfilter_root / 'ctc'
@@ -1206,7 +1256,7 @@ def extract_bids_entities(filename: str) -> Dict[str, Optional[str]]:
     Dict[str, Optional[str]]
         Dictionary with extracted entities
     """
-    entities = {
+    entities: Dict[str, Optional[str]] = {
         'sub': None,
         'ses': None,
         'task': None,
@@ -1646,6 +1696,39 @@ def import_meg(
             
             logger.info(f"Found {len(all_fif_files)} FIF file(s) ({len(raw_files)} raw, {len(derivative_files)} derivatives)")
             
+            # Apply file exclusion patterns if configured
+            exclude_patterns = config.get('exclude_patterns', [])
+            if exclude_patterns:
+                logger.info(f"Applying {len(exclude_patterns)} exclusion pattern(s)...")
+                excluded_raw = []
+                excluded_deriv = []
+                
+                # Check raw files
+                for fif_file in raw_files:
+                    matched_pattern = should_exclude_file(fif_file.name, exclude_patterns)
+                    if matched_pattern:
+                        logger.info(f"  ⊗ Excluded (pattern: {matched_pattern}): {fif_file.name}")
+                        excluded_raw.append(fif_file)
+                        stats.add_file('excluded', 'excluded', fif_file.name)
+                
+                # Check derivative files
+                for fif_file in derivative_files:
+                    matched_pattern = should_exclude_file(fif_file.name, exclude_patterns)
+                    if matched_pattern:
+                        logger.info(f"  ⊗ Excluded (pattern: {matched_pattern}): {fif_file.name}")
+                        excluded_deriv.append(fif_file)
+                        stats.add_file('excluded', 'excluded', fif_file.name)
+                
+                # Remove excluded files from processing lists
+                raw_files = [f for f in raw_files if f not in excluded_raw]
+                derivative_files = [f for f in derivative_files if f not in excluded_deriv]
+                
+                if excluded_raw or excluded_deriv:
+                    total_excluded = len(excluded_raw) + len(excluded_deriv)
+                    logger.info(f"  Excluded {total_excluded} file(s)")
+            
+            logger.info(f"Processing {len(raw_files)} raw file(s), {len(derivative_files)} derivative file(s)")
+            
             # Detect calibration files
             if calibration_auto_detect:
                 logger.info("Detecting calibration files...")
@@ -1783,7 +1866,7 @@ def import_meg(
                     
                     # Build mapping of task -> raw file organization (splits or runs)
                     task_organization = {}  # task -> {'type': 'splits'/'runs', 'base_names': set()}
-                    for raw_path, (task, task_entities, run) in final_mapping.items():
+                    for raw_path, (task, task_entities, run, _) in final_mapping.items():
                         if task not in task_organization:
                             task_organization[task] = {'base_names': set(), 'has_splits': False, 'has_runs': False}
                         
@@ -1870,8 +1953,10 @@ def import_meg(
         # Summary for this participant
         logger.info(f"{'-'*60}")
         logger.info(f"Summary for {bids_subject}:")
-        logger.info(f"  Total files: {stats.total_files}")
+        logger.info(f"  Total files found: {stats.total_files}")
         logger.info(f"  ✓ Converted: {stats.converted}")
+        if stats.excluded > 0:
+            logger.info(f"  ⊗ Excluded:  {stats.excluded}")
         logger.info(f"  ⊘ Skipped:   {stats.skipped}")
         logger.info(f"  ✗ Failed:    {stats.failed}")
         if stats.task_counts:

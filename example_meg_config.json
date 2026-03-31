@@ -35,6 +35,12 @@
       "description": "Generic task pattern"
     }
   ],
+  "exclude_patterns": [
+    "*test*",
+    "*demo*",
+    "*backup*",
+    "*scratch*"
+  ],
   "calibration": {
     "system": "triux",
     "auto_detect": true,
