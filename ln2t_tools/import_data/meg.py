@@ -175,25 +175,40 @@ def load_participants_mapping(participants_file: Path) -> Dict[str, str]:
     return mapping
 
 
-def extract_derivative_info(filename: str) -> Optional[Tuple[str, str]]:
-    """Detect and extract MaxFilter processing information from filename.
+def _extract_base_name_and_suffix(filename: str, with_proc: bool = False) -> Tuple[str, Optional[str]]:
+    """Extract base name and optional proc suffix from a filename.
     
-    Strips recognized suffixes and builds the base filename. Handles multiple
-    suffixes (e.g., chessboard2_mc_ave.fif -> chessboard2.fif, "mc-ave").
+    Used by split detection to group files by their base name and processing label.
     
     Parameters
     ----------
     filename : str
-        FIF filename to check
+        FIF filename
+    with_proc : bool
+        If True, also extract proc label (e.g., "tsss-mc"). If False, ignore proc labels.
     
     Returns
     -------
-    Optional[Tuple[str, str]]
-        (base_filename, proc_label) if derivative detected, None if raw file
+    Tuple[str, Optional[str]]
+        (base_name, proc_label) where proc_label is None if with_proc=False
     """
     stem = Path(filename).stem
     
-    # Recognized MaxFilter suffixes in order of priority
+    # FIRST: Remove trailing split suffix if present (e.g., _sss-2)
+    # This is for Pattern 2: base_sss-2.fif
+    split_after_proc = re.match(r'^(.+)-\d+$', stem)
+    if split_after_proc:
+        stem = split_after_proc.group(1)
+    
+    if not with_proc:
+        # Also remove leading split suffix if present (e.g., -1_sss becomes just sss part)
+        # This is for Pattern 1: base-1_sss.fif
+        split_before_proc = re.match(r'^(.+?)-\d+(.*)$', stem)
+        if split_before_proc:
+            stem = split_before_proc.group(1) + split_before_proc.group(2)
+        return (stem, None)
+    
+    # Extract proc label
     derivative_suffixes = [
         ('_tsss', 'tsss'),
         ('_sss', 'sss'),
@@ -219,17 +234,47 @@ def extract_derivative_info(filename: str) -> Optional[Tuple[str, str]]:
         if not found_match:
             break
     
+    # FINALLY: Remove any remaining leading split suffix (e.g., -1 or -2)
+    # This is for Pattern 1: base-1_sss.fif where base_name is extracted after removing _sss
+    split_before_proc = re.match(r'^(.+?)-\d+$', current_stem)
+    if split_before_proc:
+        current_stem = split_before_proc.group(1)
+    
     if found_suffixes:
-        # Combine multiple proc labels with hyphens, avoiding duplicates
         unique_labels = []
         for label in found_suffixes:
             if label not in unique_labels:
                 unique_labels.append(label)
         proc_label = '-'.join(unique_labels)
-        base_filename = current_stem + '.fif'
-        return (base_filename, proc_label)
+        return (current_stem, proc_label)
     
-    return None
+    return (stem, None)
+
+
+def extract_derivative_info(filename: str) -> Optional[Tuple[str, str]]:
+    """Detect and extract MaxFilter processing information from filename.
+    
+    Strips recognized suffixes and builds the base filename. Handles multiple
+    suffixes (e.g., chessboard2_mc_ave.fif -> chessboard2.fif, "mc-ave").
+    Also handles split file suffixes (e.g., file_tsss_mc-1.fif, file-1_tsss_mc.fif).
+    
+    Parameters
+    ----------
+    filename : str
+        FIF filename to check
+    
+    Returns
+    -------
+    Optional[Tuple[str, str]]
+        (base_filename, proc_label) if derivative detected, None if raw file
+    """
+    base_name, proc_label = _extract_base_name_and_suffix(filename, with_proc=True)
+    
+    if proc_label is None:
+        return None
+    
+    base_filename = base_name + '.fif'
+    return (base_filename, proc_label)
 
 
 def should_exclude_file(filename: str, exclude_patterns: List[str]) -> Optional[str]:
@@ -284,12 +329,7 @@ def detect_split_files(fif_files: List[Path]) -> Dict[Path, List[Path]]:
         if fif_path in processed:
             continue
         
-        stem = fif_path.stem
-        match = re.match(r'^(.+?)(?:-\d+)?$', stem)
-        if not match:
-            continue
-        
-        base_name = match.group(1)
+        base_name, _ = _extract_base_name_and_suffix(fif_path.name, with_proc=False)
         parent_dir = fif_path.parent
         base_file = parent_dir / f"{base_name}.fif"
         
@@ -319,7 +359,7 @@ def detect_split_files(fif_files: List[Path]) -> Dict[Path, List[Path]]:
     return split_groups
 
 
-def detect_derivative_split_files(deriv_files: List[Path]) -> Dict[Path, List[Path]]:
+def detect_derivative_split_files(deriv_files: List[Path]) -> Tuple[Dict[Path, List[Path]], set]:
     """Detect and group multi-part derivative FIFF files.
     
     For derivatives like NAP-1_tsss_mc.fif, NAP-2_tsss_mc.fif, we need to:
@@ -338,8 +378,8 @@ def detect_derivative_split_files(deriv_files: List[Path]) -> Dict[Path, List[Pa
     
     Returns
     -------
-    Dict[Path, List[Path]]
-        Mapping of primary file -> list of all parts in order
+    Tuple[Dict[Path, List[Path]], set]
+        (mapping of primary file -> list of all parts in order, set of all files in split groups)
     """
     split_groups = {}
     processed = set()
@@ -348,19 +388,10 @@ def detect_derivative_split_files(deriv_files: List[Path]) -> Dict[Path, List[Pa
     # Group derivatives by (base_name, proc_label)
     deriv_groups = defaultdict(list)
     for deriv_file in deriv_files:
-        deriv_info = extract_derivative_info(deriv_file.name)
-        if deriv_info is None:
-            continue
-        base_filename, proc_label = deriv_info
+        base_name, proc_label = _extract_base_name_and_suffix(deriv_file.name, with_proc=True)
         
-        # Extract base name without split suffix
-        # NAP.fif or NAP-1.fif -> NAP
-        base_stem = Path(base_filename).stem
-        base_match = re.match(r'^(.+?)(?:-\d+)?$', base_stem)
-        if base_match:
-            base_name = base_match.group(1)
-        else:
-            base_name = base_stem
+        if proc_label is None:
+            continue
         
         key = (base_name, proc_label)
         deriv_groups[key].append(deriv_file)
@@ -370,39 +401,68 @@ def detect_derivative_split_files(deriv_files: List[Path]) -> Dict[Path, List[Pa
         if len(files) <= 1:
             continue
         
-        # Try pattern: NAP_proc.fif, NAP-1_proc.fif, NAP-2_proc.fif
         proc_suffix = proc_label.replace('-', '_')
         parent_dir = files[0].parent
+        
+        parts = []
+        
+        # Try pattern 1: base_proc.fif, base-1_proc.fif, base-2_proc.fif (split BEFORE proc)
+        # This is the preferred pattern. Can have base file or just -1, -2, etc.
         base_file = parent_dir / f"{base_name}_{proc_suffix}.fif"
         
+        pattern1_parts = []
         if base_file in deriv_files_set:
-            primary = base_file
-        else:
-            # Use first numbered file as primary
-            primary = parent_dir / f"{base_name}-1_{proc_suffix}.fif"
-            if primary not in deriv_files_set:
-                continue
+            pattern1_parts.append(base_file)
         
-        # Collect all parts
-        parts = []
-        if base_file in deriv_files_set:
-            parts.append(base_file)
-        
+        # Look for split parts (-1, -2, etc.) regardless of whether base exists
         idx = 1
         while True:
             next_part = parent_dir / f"{base_name}-{idx}_{proc_suffix}.fif"
             if next_part in deriv_files_set:
-                parts.append(next_part)
+                pattern1_parts.append(next_part)
                 idx += 1
             else:
                 break
         
+        if len(pattern1_parts) > 1:
+            parts = pattern1_parts
+        
+        # If pattern 1 didn't find splits, try pattern 2: base_proc-1.fif, base_proc-2.fif (split AFTER proc)
+        if not parts:
+            base_file_p2 = parent_dir / f"{base_name}_{proc_suffix}-1.fif"
+            
+            if base_file_p2 in deriv_files_set:
+                pattern2_parts = []
+                
+                # Check if there's also a base file without split suffix
+                base_without_split = parent_dir / f"{base_name}_{proc_suffix}.fif"
+                if base_without_split in deriv_files_set:
+                    pattern2_parts.append(base_without_split)
+                
+                idx = 1
+                while True:
+                    next_part = parent_dir / f"{base_name}_{proc_suffix}-{idx}.fif"
+                    if next_part in deriv_files_set:
+                        pattern2_parts.append(next_part)
+                        idx += 1
+                    else:
+                        break
+                
+                if len(pattern2_parts) > 1:
+                    parts = pattern2_parts
+        
+        # Create split group if we found parts
         if len(parts) > 1:
             split_groups[parts[0]] = parts
-            processed.update(parts)
-            logger.debug(f"  Detected derivative split: {base_name}_{proc_suffix} ({len(parts)} parts)")
+            # CRITICAL: Exclude ALL files in this (base_name, proc_label) group from primary processing
+            processed.update(files)
+            
+            # Check if there are alternative pattern files in the group
+            alternative_files = [f for f in files if f not in parts]
+            if alternative_files:
+                logger.info(f"Consolidated: {base_name}_{proc_label} - multiple naming patterns detected")
     
-    return split_groups
+    return split_groups, processed
 
 
 
@@ -1139,7 +1199,8 @@ def copy_derivative_file(
     derivatives_root: Path,
     pipeline_name: str,
     pipeline_version: Optional[str] = None,
-    split_parts: Optional[List[Path]] = None
+    split_parts: Optional[List[Path]] = None,
+    acq: Optional[str] = None
 ) -> bool:
     """Copy a derivative FIF file to BIDS derivatives folder.
     
@@ -1165,6 +1226,8 @@ def copy_derivative_file(
         Pipeline version string
     split_parts : Optional[List[Path]]
         List of all split file parts (including primary)
+    acq : Optional[str]
+        Acquisition label (optional)
     
     Returns
     -------
@@ -1193,15 +1256,40 @@ def copy_derivative_file(
     # If there are split parts, copy each with split entity
     if split_parts and len(split_parts) > 1:
         all_success = True
-        for idx, split_file in enumerate(split_parts, start=1):
-            # Target filename: sub-<label>[_ses-<label>]_task-<label>[_run-<index>]_split-<index>_proc-<label>_meg.fif
+        for split_file in split_parts:
+            # Determine split index from source filename suffix
+            # Examples:
+            # - MEG_3818_RestEyesClosed_sss.fif (no suffix) -> split-01
+            # - MEG_3818_RestEyesClosed-1_sss.fif (suffix -1) -> split-02
+            # - MEG_3818_RestEyesClosed_sss-1.fif (suffix -1 after proc) -> split-02
+            # Extract split suffix from source filename
+            stem = split_file.stem
+            
+            # First check for split before proc pattern: base-N_proc.fif
+            split_before_match = re.search(r'^(.+)-(\d+)_[a-z]', stem)
+            if split_before_match:
+                split_num = int(split_before_match.group(2))
+                split_idx = split_num + 1  # -1 becomes split-02, -2 becomes split-03
+            else:
+                # Check for split after proc pattern: base_proc-N.fif
+                split_after_match = re.search(r'_[a-z]+(?:_[a-z]+)*-(\d+)$', stem)
+                if split_after_match:
+                    split_num = int(split_after_match.group(1))
+                    split_idx = split_num + 1  # -1 becomes split-02, -2 becomes split-03
+                else:
+                    # No split suffix - use position in parts list
+                    split_idx = split_parts.index(split_file) + 1
+            
+            # Target filename: sub-<label>[_ses-<label>]_task-<label>[_acq-<label>][_run-<index>]_split-<index>_proc-<label>_meg.fif
             fname_parts = [f"sub-{subject}"]
             if session:
                 fname_parts.append(f"ses-{session}")
             fname_parts.append(f"task-{task}")
+            if acq is not None:
+                fname_parts.append(f"acq-{acq}")
             if run is not None:
                 fname_parts.append(f"run-{run:02d}")
-            fname_parts.append(f"split-{idx:02d}")
+            fname_parts.append(f"split-{split_idx:02d}")
             fname_parts.append(f"proc-{proc_label}")
             fname_parts.append("meg.fif")
             
@@ -1210,7 +1298,7 @@ def copy_derivative_file(
             
             try:
                 shutil.copy2(split_file, target_path)
-                logger.debug(f"    -> Saved split {idx}/{len(split_parts)}: {target_name}")
+                logger.debug(f"    -> Saved split {split_idx}/{len(split_parts)}: {target_name}")
             except Exception as err:
                 logger.error(f"  ✗ Failed to copy derivative split {split_file.name}: {err}")
                 all_success = False
@@ -1219,11 +1307,13 @@ def copy_derivative_file(
     
     else:
         # Single file (no splits)
-        # Target filename: sub-<label>[_ses-<label>]_task-<label>[_run-<index>]_proc-<label>_meg.fif
+        # Target filename: sub-<label>[_ses-<label>]_task-<label>[_acq-<label>][_run-<index>]_proc-<label>_meg.fif
         fname_parts = [f"sub-{subject}"]
         if session:
             fname_parts.append(f"ses-{session}")
         fname_parts.append(f"task-{task}")
+        if acq is not None:
+            fname_parts.append(f"acq-{acq}")
         if run is not None:
             fname_parts.append(f"run-{run:02d}")
         fname_parts.append(f"proc-{proc_label}")
@@ -1242,9 +1332,10 @@ def copy_derivative_file(
 
 
 def extract_bids_entities(filename: str) -> Dict[str, Optional[str]]:
-    """Extract BIDS entities from a filename.
+    """Extract all BIDS entities from a filename.
     
-    Parses BIDS entities like sub, ses, task, run, etc.
+    Parses BIDS entities including sub, ses, task, run, acq, rec, split, proc, dir, ce
+    and other standard entities. Handles both standard and extended entities.
     
     Parameters
     ----------
@@ -1254,30 +1345,47 @@ def extract_bids_entities(filename: str) -> Dict[str, Optional[str]]:
     Returns
     -------
     Dict[str, Optional[str]]
-        Dictionary with extracted entities
+        Dictionary with extracted entities (all values default to None)
     """
     entities: Dict[str, Optional[str]] = {
         'sub': None,
         'ses': None,
         'task': None,
+        'acq': None,
+        'ce': None,
+        'rec': None,
+        'dir': None,
         'run': None,
+        'mod': None,
+        'echo': None,
+        'flip': None,
+        'inv': None,
+        'mt': None,
+        'part': None,
+        'proc': None,
+        'hemi': None,
+        'space': None,
+        'split': None,
+        'desc': None,
     }
     
-    # Remove extension
-    name_without_ext = filename.rsplit('.', 1)[0]
+    # Remove extension(s) - handle cases like .fif, .json, .nii.gz
+    name = filename
+    for ext in ['.nii.gz', '.tsv.gz', '.json', '.nii', '.tsv', '.fif', '.pos', '.dat']:
+        if name.lower().endswith(ext):
+            name = name[:-len(ext)]
+            break
     
     # Split by underscore
-    parts = name_without_ext.split('_')
+    parts = name.split('_')
     
     for part in parts:
-        if part.startswith('sub-'):
-            entities['sub'] = part[4:]
-        elif part.startswith('ses-'):
-            entities['ses'] = part[4:]
-        elif part.startswith('task-'):
-            entities['task'] = part[5:]
-        elif part.startswith('run-'):
-            entities['run'] = part[4:]
+        if '-' not in part:
+            continue
+        
+        entity_name, entity_value = part.split('-', 1)
+        if entity_name in entities and entity_value:
+            entities[entity_name] = entity_value
     
     return entities
 
@@ -1696,6 +1804,15 @@ def import_meg(
             
             logger.info(f"Found {len(all_fif_files)} FIF file(s) ({len(raw_files)} raw, {len(derivative_files)} derivatives)")
             
+            # Log derivative files found for debugging
+            if derivative_files:
+                logger.debug(f"  Derivative files detected:")
+                for df in derivative_files:
+                    deriv_info = extract_derivative_info(df.name)
+                    if deriv_info:
+                        base, proc = deriv_info
+                        logger.debug(f"    • {df.name} -> base={base}, proc={proc}")
+            
             # Apply file exclusion patterns if configured
             exclude_patterns = config.get('exclude_patterns', [])
             if exclude_patterns:
@@ -1855,13 +1972,10 @@ def import_meg(
                     logger.info(f"Converting {len(derivative_files)} derivative file(s)...")
                     
                     # Detect split files in derivatives (special handling for proc suffixes)
-                    deriv_split_groups = detect_derivative_split_files(derivative_files)
-                    if deriv_split_groups:
-                        logger.info(f"Detected {len(deriv_split_groups)} derivative split file group(s)")
+                    deriv_split_groups, deriv_split_parts = detect_derivative_split_files(derivative_files)
                     
-                    deriv_split_parts = set()
-                    for primary_file, parts in deriv_split_groups.items():
-                        deriv_split_parts.update(parts[1:])
+                    # deriv_split_parts contains ALL files that are part of split groups
+                    # Primary deriv files are ONLY those NOT in any split group
                     primary_deriv_files = [f for f in derivative_files if f not in deriv_split_parts]
                     
                     # Build mapping of task -> raw file organization (splits or runs)
@@ -1879,7 +1993,7 @@ def import_meg(
                         elif run is not None:
                             task_organization[task]['has_runs'] = True
                     
-                    # Process each primary derivative file
+                    # Process each primary and split derivative file
                     for deriv_file in primary_deriv_files:
                         deriv_info = extract_derivative_info(deriv_file.name)
                         if deriv_info is None:
@@ -1892,6 +2006,21 @@ def import_meg(
                         if pattern_rule:
                             task = pattern_rule.get('task', 'unknown')
                             run_extraction = pattern_rule.get('run_extraction', 'last_digits')
+                            
+                            # Extract acquisition label if configured
+                            acq = None
+                            acq_config = pattern_rule.get('acq')
+                            if acq_config:
+                                # Check if acq_config is an extraction method (last_digits, first_digits) or static text
+                                if acq_config in ('last_digits', 'first_digits'):
+                                    # Extract number from filename
+                                    acq = extract_run_from_filename(deriv_file.name, acq_config)
+                                    # Convert to string for BIDS
+                                    if acq is not None:
+                                        acq = str(acq)
+                                else:
+                                    # Static text value
+                                    acq = acq_config
                             
                             # Determine if this derivative is a split or a run based on raw file organization
                             run = None
@@ -1926,18 +2055,74 @@ def import_meg(
                             else:
                                 run_str = ""
                             
-                            logger.info(f"  ✓ Converting: {deriv_file.name}{run_str} -> task={task} (proc-{proc_label})")
+                            logger.info(f"  ✓ Converting: {deriv_file.name}{run_str} -> task={task}, acq={acq} (proc-{proc_label})")
                             
                             success = copy_derivative_file(
                                 deriv_file, participant_id, session_id, task, run,
                                 deriv_info, derivatives_dir, pipeline_name, pipeline_version,
-                                split_parts=split_parts_for_deriv
+                                split_parts=split_parts_for_deriv, acq=acq
                             )
                             
                             if not success:
                                 logger.warning(f"    ✗ Copy failed for {deriv_file.name}")
                         else:
                             logger.warning(f"  ⊘ No pattern match for derivative: {deriv_file.name}")
+                    
+                    # Process split file groups
+                    for primary_file, split_parts in deriv_split_groups.items():
+                        deriv_info = extract_derivative_info(primary_file.name)
+                        if deriv_info is None:
+                            continue
+                        
+                        base_filename, proc_label = deriv_info
+                        
+                        # Try to match derivative to a raw file task/run
+                        pattern_rule = match_file_pattern(primary_file.name, file_patterns)
+                        if pattern_rule:
+                            task = pattern_rule.get('task', 'unknown')
+                            run_extraction = pattern_rule.get('run_extraction', 'last_digits')
+                            
+                            # Extract acquisition label if configured
+                            acq = None
+                            acq_config = pattern_rule.get('acq')
+                            if acq_config:
+                                # Check if acq_config is an extraction method (last_digits, first_digits) or static text
+                                if acq_config in ('last_digits', 'first_digits'):
+                                    # Extract number from filename
+                                    acq = extract_run_from_filename(primary_file.name, acq_config)
+                                    # Convert to string for BIDS
+                                    if acq is not None:
+                                        acq = str(acq)
+                                else:
+                                    # Static text value
+                                    acq = acq_config
+                            
+                            # Determine run for this split group
+                            run = None
+                            if task in task_organization:
+                                deriv_base = base_filename.split('-')[0]
+                                if not (task_organization[task]['has_splits'] and 
+                                        deriv_base in task_organization[task]['base_names']):
+                                    # This split group should be treated as run-based
+                                    run = extract_run_from_filename(primary_file.name, run_extraction)
+                            else:
+                                # No corresponding raw file info, use default extraction
+                                run = extract_run_from_filename(primary_file.name, run_extraction)
+                            
+                            # Log split file group processing
+                            num_parts = len(split_parts)
+                            logger.info(f"  ✓ Converting: {primary_file.name} ({num_parts} parts) -> task={task}, acq={acq} (proc-{proc_label})")
+                            
+                            success = copy_derivative_file(
+                                primary_file, participant_id, session_id, task, run,
+                                deriv_info, derivatives_dir, pipeline_name, pipeline_version,
+                                split_parts=split_parts, acq=acq
+                            )
+                            
+                            if not success:
+                                logger.warning(f"    ✗ Copy failed for split group: {primary_file.name}")
+                        else:
+                            logger.warning(f"  ⊘ No pattern match for split derivative: {primary_file.name}")
             
             # Add AssociatedEmptyRoom to all MEG JSON files
             logger.info("Processing AssociatedEmptyRoom metadata...")
