@@ -10,6 +10,7 @@ import re
 import shutil
 import fnmatch
 import os
+import sys
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple, Set
 from collections import defaultdict
@@ -35,6 +36,47 @@ try:
 except ImportError:
     MNE_AVAILABLE = False
     logger.warning("MNE-Python and mne-bids not available. Install with: pip install mne mne-bids")
+
+
+def prompt_user_for_duplicate(files: List[Path]) -> Path:
+    """Prompt user to choose between duplicate files.
+    
+    Only prompts if stdin is a TTY (interactive environment).
+    Falls back silently to first file if not interactive.
+    
+    Parameters
+    ----------
+    files : List[Path]
+        List of duplicate file paths (should have 2+ files)
+    
+    Returns
+    -------
+    Path
+        The file chosen by the user, or first file if non-interactive
+    """
+    # Check if stdin is a TTY (interactive terminal)
+    if not sys.stdin.isatty():
+        logger.debug(f"Non-interactive environment: silently choosing {files[0].name}")
+        return files[0]
+    
+    # Display options
+    print(f"\n⚠️  Duplicate files with same preference level found:")
+    for idx, fpath in enumerate(files, 1):
+        print(f"  {idx}. {fpath.name}")
+    
+    # Loop until valid selection
+    while True:
+        try:
+            response = input(f"\nWhich file to keep? Enter 1-{len(files)}: ").strip()
+            choice = int(response)
+            if 1 <= choice <= len(files):
+                selected = files[choice - 1]
+                print(f"✓ Selected: {selected.name}\n")
+                return selected
+            else:
+                print(f"Invalid choice. Please enter 1-{len(files)}.")
+        except ValueError:
+            print(f"Invalid input. Please enter a number 1-{len(files)}.")
 
 
 def get_fif_header_info(file_path: Path) -> Optional[Dict[str, Any]]:
@@ -164,7 +206,7 @@ def inspect_fif_header(fif_path: Path, verbose: bool = True) -> Optional[Dict[st
         return None
 
 
-def identify_primary_files(fif_files: List[Path]) -> Tuple[List[Path], int]:
+def identify_primary_files(fif_files: List[Path], interactive: bool = False) -> Tuple[List[Path], int]:
     """Identify and filter FIF files by separating PRIMARY, SECONDARY, and STANDALONE.
     
     Algorithm - Three-phase approach:
@@ -188,9 +230,8 @@ def identify_primary_files(fif_files: List[Path]) -> Tuple[List[Path], int]:
     ----------
     fif_files : List[Path]
         List of FIF file paths
-    
-    Returns
-    -------
+    interactive : bool
+        If True, prompt user when duplicate files have same preference level
     List[Path]
         List of files to process (duplicates removed, relationships preserved)
     """
@@ -237,21 +278,41 @@ def identify_primary_files(fif_files: List[Path]) -> Tuple[List[Path], int]:
         
         return (meas_date, first_samp_tuple)
     
+    # Helper: Get preference level for a file
+    def get_preference_level(file_path: Path) -> int:
+        """Return preference level: 0 (underscore) > 1 (dash) > 2 (none)."""
+        suffix_type = get_filename_suffix_type(file_path.name)
+        if suffix_type == 'underscore':
+            return 0
+        elif suffix_type == 'dash':
+            return 1
+        else:
+            return 2
+    
     # Helper: Process a group of files with same fingerprint
-    def process_duplicate_group(files_in_group: List[Path]) -> Path:
-        """Select best file from duplicates (underscore > dash > none)."""
+    def process_duplicate_group(files_in_group: List[Path], interactive: bool = False) -> Path:
+        """Select best file from duplicates (underscore > dash > none).
+        
+        If interactive=True and files have same preference level, prompts user to choose.
+        """
         if len(files_in_group) == 1:
             return files_in_group[0]
         
         files_sorted = sorted(
             files_in_group,
-            key=lambda f: (
-                0 if get_filename_suffix_type(f.name) == 'underscore' else (
-                    1 if get_filename_suffix_type(f.name) == 'dash' else 2
-                ),
-                f.name
-            )
+            key=lambda f: (get_preference_level(f), f.name)
         )
+        
+        # Check if top 2 files have same preference level
+        if len(files_sorted) >= 2:
+            level_1 = get_preference_level(files_sorted[0])
+            level_2 = get_preference_level(files_sorted[1])
+            
+            # If same preference level and interactive mode, ask user
+            if level_1 == level_2 and interactive:
+                canonical = prompt_user_for_duplicate(files_sorted)
+                logger.info(f"  → (user selected) {canonical.name} from {len(files_sorted)} duplicate(s)")
+                return canonical
         
         canonical = files_sorted[0]
         
@@ -352,7 +413,7 @@ def identify_primary_files(fif_files: List[Path]) -> Tuple[List[Path], int]:
     excluded_primary_files = set()  # Use set to track excluded PRIMARY files
     
     for fp, files_in_group in primary_by_fp.items():
-        canonical = process_duplicate_group(files_in_group)
+        canonical = process_duplicate_group(files_in_group, interactive=interactive)
         kept_primary_files.add(canonical)
         # Track files that were excluded from this group
         for fif_file in files_in_group:
@@ -467,7 +528,7 @@ def identify_primary_files(fif_files: List[Path]) -> Tuple[List[Path], int]:
     kept_standalone_files = []
     
     for fp, files_in_group in standalone_by_fp.items():
-        canonical = process_duplicate_group(files_in_group)
+        canonical = process_duplicate_group(files_in_group, interactive=interactive)
         kept_standalone_files.append(canonical)
     
 
@@ -2124,7 +2185,8 @@ def import_meg(
     derivatives_dir: Optional[Path] = None,
     ds_initials: Optional[str] = None,
     session: Optional[str] = None,
-    overwrite: bool = False
+    overwrite: bool = False,
+    interactive_deduplication: bool = True
 ) -> bool:
     """Import MEG data to BIDS format.
     
@@ -2146,6 +2208,9 @@ def import_meg(
         Session label (without 'ses-' prefix) - if None, auto-detects sessions
     overwrite : bool
         If True, overwrite existing participant data. If False, skip existing participants.
+    interactive_deduplication : bool
+        If True and in interactive environment, prompt user when duplicate files 
+        have same preference level. Default: True (interactive mode enabled)
     
     Returns
     -------
@@ -2350,7 +2415,7 @@ def import_meg(
                     logger.info("  ℹ No calibration files found")
             
             # Identify primary files (remove duplicates) - returns (files, split_group_count)
-            raw_files, split_group_count = identify_primary_files(raw_files)
+            raw_files, split_group_count = identify_primary_files(raw_files, interactive=interactive_deduplication)
             
             # Detect split files
             split_file_groups = detect_split_files(raw_files)
@@ -2395,7 +2460,8 @@ def import_meg(
                             acq = str(acq_config)
                     
                     file_mapping[fif_file] = (task, task_entities, run, acq, pattern_rule)
-                    logger.debug(f"  {fif_file.name} -> task={task}, run={run}, acq={acq}")
+                    acq_str = f", acq={acq}" if acq is not None else ""
+                    logger.debug(f"  {fif_file.name} -> task={task}, run={run}{acq_str}")
                 else:
                     logger.warning(f"  ⊘ No matching pattern for: {fif_file.name}")
             
@@ -2497,8 +2563,9 @@ def import_meg(
                         
                         base_filename, proc_label = deriv_info
                         
-                        # Try to match derivative to a raw file task/run
-                        pattern_rule = match_file_pattern(deriv_file.name, file_patterns)
+                        # Try to match derivative to a raw file task/run using the BASE filename
+                        # (not the derivative filename with processor suffix)
+                        pattern_rule = match_file_pattern(base_filename, file_patterns)
                         if pattern_rule:
                             task = pattern_rule.get('task', 'unknown')
                             run_extraction = pattern_rule.get('run_extraction', 'last_digits')
@@ -2556,7 +2623,8 @@ def import_meg(
                             else:
                                 run_str = ""
                             
-                            logger.info(f"  ✓ Converting: {deriv_file.name}{run_str} -> task={task}, acq={acq} (proc-{proc_label})")
+                            acq_str = f", acq={acq}" if acq is not None else ""
+                            logger.info(f"  ✓ Converting: {deriv_file.name}{run_str} -> task={task}{acq_str} (proc-{proc_label})")
                             
                             success = copy_derivative_file(
                                 deriv_file, participant_id, session_id, task, run,
@@ -2577,8 +2645,8 @@ def import_meg(
                         
                         base_filename, proc_label = deriv_info
                         
-                        # Try to match derivative to a raw file task/run
-                        pattern_rule = match_file_pattern(primary_file.name, file_patterns)
+                        # Try to match derivative to a raw file task/run using the BASE filename
+                        pattern_rule = match_file_pattern(base_filename, file_patterns)
                         if pattern_rule:
                             task = pattern_rule.get('task', 'unknown')
                             run_extraction = pattern_rule.get('run_extraction', 'last_digits')
@@ -2615,7 +2683,8 @@ def import_meg(
                                 run_str = f" ({num_parts} parts, run {run})"
                             else:
                                 run_str = f" ({num_parts} parts)"
-                            logger.info(f"  ✓ Converting: {primary_file.name}{run_str} -> task={task}, acq={acq} (proc-{proc_label})")
+                            acq_str = f", acq={acq}" if acq is not None else ""
+                            logger.info(f"  ✓ Converting: {primary_file.name}{run_str} -> task={task}{acq_str} (proc-{proc_label})")
                             
                             success = copy_derivative_file(
                                 primary_file, participant_id, session_id, task, run,
