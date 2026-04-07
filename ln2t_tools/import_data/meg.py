@@ -1108,6 +1108,29 @@ def find_meg_folder(meg_source_dir: Path, meg_id: str) -> Optional[Path]:
     return None
 
 
+def has_fif_files_in_folder(folder: Path) -> bool:
+    """Check if FIF files exist directly in a folder (non-recursive).
+    
+    Used to detect legacy MEG data without session subdirectories where
+    FIF files are stored directly in the meg_XXXX/ folder.
+    
+    Parameters
+    ----------
+    folder : Path
+        Path to folder to check
+    
+    Returns
+    -------
+    bool
+        True if one or more .fif files found directly in folder
+    """
+    if not folder.exists():
+        return False
+    
+    fif_files = list(folder.glob("*.fif"))
+    return len(fif_files) > 0
+
+
 def auto_detect_sessions(source_dir: Path) -> List[Tuple[str, Optional[str]]]:
     """Auto-detect sessions from date-named folders.
     
@@ -1165,7 +1188,7 @@ def find_fine_calibration_file(
         return None
     
     if calibration_system == 'vectorview':
-        vectorview_file = sss_dir / 'sss_cal_vectorview.dat'
+        vectorview_file = sss_dir / 'sss_cal_erasme_enm.dat'
         if vectorview_file.exists():
             logger.info(f"  ✓ Fine-calibration: {vectorview_file.name} (VectorView)")
             return vectorview_file
@@ -1227,11 +1250,48 @@ def find_fine_calibration_file(
         return None
 
 
+def extract_measurement_date_from_fif(fif_file: Path) -> Optional[str]:
+    """Extract measurement date from a FIF file and convert to YYMMDD format.
+    
+    Used as fallback for calibration file matching when session folder
+    doesn't contain a date (e.g., legacy format without session subdirectories).
+    
+    Parameters
+    ----------
+    fif_file : Path
+        Path to raw FIF file
+    
+    Returns
+    -------
+    Optional[str]
+        Date string in YYMMDD format, or None if extraction failed
+    """
+    if not MNE_AVAILABLE or not fif_file.exists():
+        return None
+    
+    try:
+        raw = mne.io.read_raw_fif(fif_file, preload=False, allow_maxshield=True, verbose=False)
+        meas_date = raw.info.get('meas_date')
+        
+        if isinstance(meas_date, datetime):
+            # Convert to YYMMDD format
+            return meas_date.strftime('%y%m%d')
+        elif isinstance(meas_date, date):
+            # Convert to YYMMDD format
+            return meas_date.strftime('%y%m%d')
+        
+        return None
+    except Exception as e:
+        logger.debug(f"Could not extract measurement date from {fif_file.name}: {e}")
+        return None
+
+
 def detect_calibration_files(
     source_dir: Path,
     session_folder: Optional[str],
     meg_maxfilter_root: Optional[Path],
-    calibration_system: str = 'triux'
+    calibration_system: str = 'triux',
+    raw_fif_files: Optional[List[Path]] = None
 ) -> Dict[str, Optional[Path]]:
     """Auto-detect Neuromag/Elekta/MEGIN calibration files.
     
@@ -1245,6 +1305,8 @@ def detect_calibration_files(
         Path to MEG/maxfilter directory
     calibration_system : str
         'triux' or 'vectorview'
+    raw_fif_files : Optional[List[Path]]
+        List of raw FIF files, used to extract measurement date as fallback
     
     Returns
     -------
@@ -1257,7 +1319,7 @@ def detect_calibration_files(
         ctc_dir = meg_maxfilter_root / 'ctc'
         
         if calibration_system == 'vectorview':
-            crosstalk_file = ctc_dir / 'ct_sparse_vectorview.fif'
+            crosstalk_file = ctc_dir / 'ct_sparse_erasme_enm.fif'
             if crosstalk_file.exists():
                 calibration_files['crosstalk'] = crosstalk_file
                 logger.debug(f"  Found cross-talk file (VectorView): {crosstalk_file.name}")
@@ -1273,6 +1335,10 @@ def detect_calibration_files(
             match = re.search(r'(\d{6})', session_folder)
             if match:
                 session_date = match.group(1)
+        
+        # Fallback: extract measurement date from FIF file if folder name has no date
+        if not session_date and raw_fif_files and len(raw_fif_files) > 0:
+            session_date = extract_measurement_date_from_fif(raw_fif_files[0])
         
         calibration_files['calibration'] = find_fine_calibration_file(
             meg_maxfilter_root, session_date, calibration_system
@@ -2317,8 +2383,14 @@ def import_meg(
         sessions = auto_detect_sessions(meg_folder)
         if not sessions:
             logger.warning(f"  ⚠ No session directories found in {meg_folder}")
-            failed_participants.append(participant_id)
-            continue
+            # Check for legacy data: FIF files directly in meg_XXXX/ folder
+            if has_fif_files_in_folder(meg_folder):
+                logger.info(f"  ℹ Found FIF files directly in folder (legacy format without sessions)")
+                sessions = [(meg_folder.name, None)]
+            else:
+                logger.error(f"  ✗ No session directories or FIF files found in {meg_folder}")
+                failed_participants.append(participant_id)
+                continue
         
         participant_success = False
         stats = ConversionStats()
@@ -2332,7 +2404,12 @@ def import_meg(
                 # Single session case - process it
                 pass
             
-            sess_dir = meg_folder / folder_name
+            # Handle legacy format: when folder_name == meg_folder.name,
+            # it's a synthetic session with FIF files directly in meg_folder
+            if folder_name == meg_folder.name and session_id is None:
+                sess_dir = meg_folder
+            else:
+                sess_dir = meg_folder / folder_name
             
             logger.info(f"{'-'*60}")
             if session_id:
@@ -2404,7 +2481,7 @@ def import_meg(
             if calibration_auto_detect:
                 logger.info("Detecting calibration files...")
                 calib_files = detect_calibration_files(
-                    meg_folder, folder_name, meg_maxfilter_root, calibration_system
+                    meg_folder, folder_name, meg_maxfilter_root, calibration_system, raw_files
                 )
                 
                 if calib_files['crosstalk'] or calib_files['calibration']:
